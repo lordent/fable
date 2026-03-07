@@ -1,145 +1,126 @@
-class F:
+from typing import Any, Self, cast
 
-    def __init__(self, query: str):
-        self.query = query
+from .core import Expr, Q
+from .field import Field
+from .mixins import SelectValuesMixin
+from .model import Model
 
-    def __str__(self):
-        return self.query
+
+class List(SelectValuesMixin, Expr):
+    def _json_build_recursive(self, fields: dict, params: list) -> str:
+        tokens = []
+        for name, value in fields.items():
+            tokens.append(f"'{name}'")
+            if isinstance(value, Expr):
+                tokens.append(value.compile(params))
+            elif isinstance(value, dict):
+                tokens.append(self._json_build_recursive(value, params))
+            else:
+                params.append(value)
+                tokens.append(f"${len(params)}")
+        return f"JSONB_BUILD_OBJECT({', '.join(tokens)})"
+
+    def compile(self, params: list) -> str:
+        sql = self._json_build_recursive(self._values, params)
+        return f"COALESCE(JSONB_AGG({sql}), '[]'::jsonb)"
 
 
-class Q:
+class Select(SelectValuesMixin, Expr):
+    def __init__(self, *args: Field, **kwargs: Expr):
+        super().__init__()
+        self._joins: dict[type[Model], Expr] = {}
+        self._filters: Q | None = None
+        self._group_by = []
+        self.values(*args, **kwargs)
 
-    def __init__(self, query: str, *args, _dependencies=None, **kwargs):
-        self.query = query
-        self.dependencies = _dependencies or set()
-        self.args = args
+    def filter(self, expr: Q) -> Self:
+        self._filters = (self._filters & expr) if self._filters else expr
+        self.relations |= expr.relations
+        return self
 
-        if kwargs:
-            for key, val in kwargs.items():
-                self.args += (val, )
-                kwargs[key] = '{}'
-            self.query = query % kwargs
+    def join(self, target: type[Model], on: Expr | None = None) -> Self:
+        if on is None:
+            for field in target._foreign_fields.values():
+                if field.to in self.relations:
+                    on = field == field.to.id
+                    break
 
-    def __str__(self):
-        return f'<query: {self.query.format(*self.args)}>'
+            if not on:
+                for rel in self.relations:
+                    for field in rel._foreign_fields.values():
+                        if field.to == target:
+                            on = field == target.id
+                            break
+                    if on:
+                        break
 
-    def __repr__(self):
-        return str(self)
-
-    def compile(self, args):
-        args.extend(self.args)
-        return self.query
-
-    # Operators
-
-    def __operand__(self, operand, value, before='', after=''):
-        args = []
-        query = self.compile(args)
-
-        if isinstance(value, Q):
-            value_args = []
-            value_query = value.compile(value_args)
-            return Q(
-                f'(({query}) {operand} {before}({value_query}){after})',
-                *args, *value_args,
-                _dependencies=(
-                    self.dependencies.union(value.dependencies)
-                    if value.dependencies else self.dependencies
-                )
+        if not on:
+            raise Exception(
+                f"No relation link found between {target._alias} and existing tables"
             )
-        else:
-            return Q(
-                f'(({query}) {operand} {before}{{}}{after})',
-                *args, value,
-                _dependencies=self.dependencies
-            )
 
-    def __eq__(self, val):
-        return self.__operand__('=', val)
+        self._joins[target] = on
+        self.relations |= {target} | on.relations
+        return self
 
-    def __ne__(self, val):
-        return self.__operand__('<>', val)
+    def compile(self, params: list) -> str:
+        has_agg = any(isinstance(v, List) for v in self._values.values())
 
-    def __or__(self, val):
-        return self.__operand__('OR', val)
+        cols = []
+        group_by = []
 
-    def __and__(self, val):
-        return self.__operand__('AND', val)
+        for name, expr in self._values.items():
+            is_expr = isinstance(expr, Expr)
+            val_sql = expr.compile(params) if is_expr else str(expr)
+            if has_agg and isinstance(expr, Field):
+                group_by.append(val_sql)
 
-    def __ge__(self, val):
-        return self.__operand__('>=', val)
+            if isinstance(expr, Field) and expr.name == name:
+                cols.append(val_sql)
+            else:
+                cols.append(f"{val_sql} AS {name}")
 
-    def __le__(self, val):
-        return self.__operand__('<=', val)
+        from_rels = self.relations - set(self._joins.keys())
 
-    def __lt__(self, val):
-        return self.__operand__('<', val)
+        def fmt(m: type[Model]):
+            t = m._table
+            if isinstance(t, Select):
+                return f'({t.compile(params)}) AS "{m._alias}"'
+            return f'"{t}" AS "{m._alias}"' if m._alias != t else f'"{t}"'
 
-    def __gt__(self, val):
-        return self.__operand__('>', val)
+        sql = [f"SELECT {', '.join(cols)}"]
 
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            return self.range(key.start, key.stop)
+        if from_rels:
+            sql.append(f"FROM {', '.join(fmt(m) for m in from_rels)}")
 
-        # Json path
-        args = []
-        query = self.compile(args)
+        for target, on in self._joins.items():
+            sql.append(f"JOIN {fmt(target)} ON {on.compile(params)}")
 
-        path_chunks = query.rsplit('->>', 1)
-        if len(path_chunks) > 1:
-            return Q(
-                f'({path_chunks[0]})->{path_chunks[~0]}->>{{}}',
-                *args, key
-            )
-        else:
-            return Q(f'({path_chunks[0]})->>{{}}', *args, key)
+        if self._filters:
+            sql.append(f"WHERE {self._filters.compile(params)}")
 
-    def any(self, val):
-        return self.__operand__('IN', val)
+        if group_by:
+            sql.append(f"GROUP BY {', '.join(dict.fromkeys(group_by))}")
 
-    def range(self, start, stop):
-        args = []
-        query = self.compile(args)
-        return Q(
-            f'({query}) BETWEEN {{}} AND {{}}',
-            *args, start, stop,
-            _dependencies=self.dependencies
+        return " ".join(sql)
+
+    def as_table(self, alias: str = None) -> type[Model]:
+        alias = alias or f"_t{id(self)}"
+        fields = {name: Field() for name in self._values.keys()}
+        sub_cls = type(
+            alias,
+            (Model,),
+            {
+                "_table": self,
+                "_alias": alias,
+                **fields,
+            },
         )
+        return cast(type[Model], sub_cls)
 
-    # LIKE
+    def prepare(self) -> tuple[str, list[Any]]:
+        params = []
+        return self.compile(params), params
 
-    def contains(self, value):
-        return self.__operand__('LIKE', value, "'%' || ", " || '%'")
-
-    def icontains(self, value):
-        return self.__operand__('ILIKE', value, "'%' || ", " || '%'")
-
-    def endswith(self, value):
-        return self.__operand__('LIKE', value, "'%' || ")
-
-    def iendswith(self, value):
-        return self.__operand__('ILIKE', value, "'%' || ")
-
-    def startswith(self, value):
-        return self.__operand__('LIKE', value, after=" || '%'")
-
-    def istartswith(self, value):
-        return self.__operand__('ILIKE', value, after=" || '%'")
-
-    def contains_regex(self, value):
-        return self.__operand__('~', value)
-
-    # ARRAY
-
-    def array_contains(self, value):
-        return self.__operand__('@>', value)
-
-    def array_contained_by(self, value):
-        return self.__operand__('<@', value)
-
-    def array_overlap(self, value):
-        return self.__operand__('&&', value)
-
-    def array_concat(self, value):
-        return self.__operand__('||', value)
+    def __repr__(self) -> str:
+        return self.compile([])

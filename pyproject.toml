@@ -1,0 +1,29 @@
+[project]
+name = "fastapi-314-project"
+version = "0.1.0"
+requires-python = ">=3.14"
+
+[tool.ruff]
+# Целевая версия Python для проверки синтаксиса (включая t-strings)
+target-version = "py314"
+line-length = 88
+
+[tool.ruff.lint]
+# Список правил
+# E, W - ошибки и предупреждения pycodestyle
+# F - проверки Pyflakes
+# I - сортировка импортов (isort)
+# UP - обновление синтаксиса до актуальной версии (pyupgrade)
+# B - поиск багов (flake8-bugbear)
+# C4 - оптимизация списков и словарей
+select = ["E", "F", "I", "UP", "B", "C4", "ASYNC"]
+ignore = []
+
+[tool.ruff.lint.isort]
+# Настройки сортировки импортов
+known-first-party = ["app"]
+
+[tool.ruff.format]
+# Настройки форматировщика (аналог Black)
+quote-style = "double"
+indent-style = "space"
