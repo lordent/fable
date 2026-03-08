@@ -1,9 +1,9 @@
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 T = TypeVar("T")
 
 
-def with_type(cls: Any) -> Any:
+def with_type[T](cls: type[T]) -> type[T]:
     if TYPE_CHECKING:
         return cls
-    return object
+    return cast(Any, object)

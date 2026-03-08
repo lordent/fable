@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 if TYPE_CHECKING:
     from .query import Select
 
+from .app import Application, get_app_for_module
+from .db import TransactionContext
 from .field import Field, ForeignKey, SerialField
 
 T = TypeVar("T", bound="Model")
@@ -27,7 +29,12 @@ class ModelMeta(type):
         attrs["_fields"] = fields
         attrs["_foreign_fields"] = foreign_fields
 
-        return super().__new__(mcs, name, bases, attrs)
+        cls: type[Model] = super().__new__(mcs, name, bases, attrs)
+
+        if not attrs.get("_virtual") and bases:
+            cls._app = get_app_for_module(cls.__module__)
+
+        return cls
 
     def __getitem__(cls: type[T], alias: str) -> type[T]:
         return cast(type[T], type(cls.__name__, (cls,), {"_alias": alias}))
@@ -46,12 +53,18 @@ class ModelMeta(type):
 
 
 class Model(metaclass=ModelMeta):
+    _virtual = False
+    _app: Application
     _table: str
     _alias: str
     _fields: dict[str, Field]
     _foreign_fields: dict[str, ForeignKey]
 
     id = SerialField()
+
+    @classmethod
+    def atomic(cls, checkpoint: bool = True):
+        return TransactionContext(cls._app.name, checkpoint)
 
     def __init__(self, **kwargs: Any):
         """Для создания экземпляров: user = User(id=1, name='Bob')"""

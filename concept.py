@@ -1,52 +1,8 @@
-from sql.core import Now
-from sql.field import ArrayField, ForeignKey, TextField, TimeField, TimeZoneField
-from sql.model import Model
-from sql.query import List, Q, Select
+from concept.models import City, Post, Store, User
+from sql.query import List, Select
 from sql.utils import describe
 
-
-# --- Тестовая схема ---
-class User(Model):
-    last_name = TextField()
-
-
-class Post(Model):
-    user_id = ForeignKey(User)
-    title = TextField()
-    tags = ArrayField(TextField)
-
-
-class City(Model):
-    name = TextField()
-    timezone = TimeZoneField()
-
-
-class Store(Model):
-    name = TextField()
-    city_id = ForeignKey(City)
-    open_at = TimeField()
-    close_at = TimeField()
-
-
-def is_open_now(store: type[Store], city: type[City]) -> Q:
-    local_now = Now().at_timezone(city.timezone).cast(TimeField)
-
-    # 2. Обычная смена (08:00 - 22:00)
-    normal = (
-        (store.open_at < store.close_at)
-        & (local_now >= store.open_at)
-        & (local_now <= store.close_at)
-    )
-
-    # 3. Ночная смена (22:00 - 04:00)
-    night = (store.open_at > store.close_at) & (
-        (local_now >= store.open_at) | (local_now <= store.close_at)
-    )
-
-    return normal | night
-
-
-q = Select(Store.name).join(City).filter(is_open_now(Store, City))
+q = Select(Store.name).join(City).filter(Store.is_open_now())
 print(q.prepare()[0])
 
 # --- Пример сложного сценария ---
