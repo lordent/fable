@@ -31,13 +31,13 @@ class ModelMeta(type):
 
         cls: type[Model] = super().__new__(mcs, name, bases, attrs)
 
-        if not attrs.get("_virtual") and bases:
+        if not cls._app and not cls._virtual and bases:
             cls._app = get_app_for_module(cls.__module__)
 
         return cls
 
     def __getitem__(cls: type[T], alias: str) -> type[T]:
-        return cast(type[T], type(cls.__name__, (cls,), {"_alias": alias}))
+        return cast(type[T], type(cls.__name__, (cls,), {"_alias": alias, "_app": cls._app}))
 
     def __iter__(cls: type[T]) -> Iterator[Field]:
         for field in cls._fields.values():
@@ -54,7 +54,7 @@ class ModelMeta(type):
 
 class Model(metaclass=ModelMeta):
     _virtual = False
-    _app: Application
+    _app: Application = None
     _table: str
     _alias: str
     _fields: dict[str, Field]
@@ -65,6 +65,14 @@ class Model(metaclass=ModelMeta):
     @classmethod
     def atomic(cls, checkpoint: bool = True):
         return TransactionContext(cls._app.name, checkpoint)
+
+    @classmethod
+    def __indexes__(cls):
+        return []
+
+    @classmethod
+    def __constraints__(cls):
+        return []
 
     def __init__(self, **kwargs: Any):
         """Для создания экземпляров: user = User(id=1, name='Bob')"""

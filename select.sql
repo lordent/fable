@@ -1,1 +1,0 @@
-SELECT "User"."id", "_t139768278552720"."count" FROM "user" AS "User" JOIN (SELECT "Post"."user", "Post"."id" AS count FROM post AS Post) AS _t139768278552720 ON (_t139768278552720.user = User.id)

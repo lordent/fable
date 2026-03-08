@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+import re
+
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Self, cast
 
@@ -83,7 +86,7 @@ class Expr:
         if isinstance(other, (list, tuple)):
             return Q("IN", self, other)
 
-        from .query import Select
+        from .select import Select
 
         if isinstance(other, Select):
             return Q("= ANY", self, other)
@@ -189,9 +192,7 @@ class Func(Expr):
 
     def compile(self, params: list[Any]) -> str:
         d = "DISTINCT " if self.is_distinct else ""
-        args_sql = ", ".join(
-            "*" if a == "*" else self._compile_val(a, params) for a in self.args
-        )
+        args_sql = ", ".join(self._compile_val(a, params) for a in self.args)
         base = f"{self.name}({d}{args_sql})"
         return f"{base} OVER ({self._window.compile(params)})" if self._window else base
 
@@ -267,6 +268,70 @@ class AtTimeZone(Expr):
         )
 
 
+class SQLInterpolation(Expr):
+    __slots__ = ("_raw_tpl", "_params_map")
+
+    def __init__(self, tpl: str, params_map: dict[str, Any]):
+        rels = set()
+        for v in params_map.values():
+            r = getattr(v, "relations", None)
+            if isinstance(r, set):
+                rels |= r
+            elif isinstance(v, type) and hasattr(v, "_table"):
+                rels.add(v)
+
+        super().__init__(relations=rels)
+        self._raw_tpl = tpl
+        self._params_map = params_map
+
+    def _resolve_value(self, path: str, params: list[Any]) -> str:
+        parts = path.split('.')
+        root_name = parts[0]
+        
+        obj = self._params_map.get(root_name)
+        if obj is None:
+            return f"'{{{path}}}'"
+
+        current = obj
+        try:
+            for part in parts[1:]:
+                current = getattr(current, part)
+        except AttributeError:
+            return f"'{{{path}}}'"
+
+        return self._compile_val(current, params)
+
+    def compile(self, params: list[Any]) -> str:
+        pattern = re.compile(r'\{([\w\.]+)\}')
+        parts = []
+        last_pos = 0
+
+        for match in pattern.finditer(self._raw_tpl):
+            static = self._raw_tpl[last_pos:match.start()]
+            if static:
+                safe_static = static.replace("'", "''")
+                parts.append(f"'{safe_static}'")
+            
+            path = match.group(1)
+            parts.append(self._resolve_value(path, params))
+            
+            last_pos = match.end()
+
+        tail = self._raw_tpl[last_pos:]
+        if tail:
+            parts.append(f"'{tail.replace("'", "''")}'")
+
+        if len(parts) == 1 and parts[0].startswith("'"):
+            return parts[0]
+
+        return f"({' || '.join(parts)})"
+
+
+def concat(text: str) -> SQLInterpolation:
+    frame = inspect.currentframe().f_back
+    return SQLInterpolation(text, frame.f_locals | frame.f_globals)
+
+
 def Count(arg: Any = "*", distinct: bool = False) -> Func:
     return Func("COUNT", arg, is_aggregate=True, is_distinct=distinct)
 
@@ -301,3 +366,7 @@ def RowNumber() -> Func:
 
 def Now() -> Func:
     return Func("NOW")
+
+
+def Extract(arg: Any) -> Func:
+    return Func("EXTRACT", arg)

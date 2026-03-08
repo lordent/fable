@@ -1,32 +1,34 @@
-from sql.core import Now
-from sql.field import ArrayField, ForeignKey, TextField, TimeField, TimeZoneField
+from __future__ import annotations
+
+from sql.core import SqlType, Now
+from sql.field import (
+    Field, TextField, IntField, SerialField, 
+    ArrayField, JSONBField, TimestampField, 
+    TimeField, ForeignKey, ReferentialAction, DecimalField, TimeZoneField, DateField,
+)
 from sql.model import Model
 
 
-class User(Model):
-    last_name = TextField()
-
-
-class Post(Model):
-    user_id = ForeignKey(User)
-    title = TextField()
-    tags = ArrayField(TextField)
-
-
-class City(Model):
-    name = TextField()
+class Cities(Model):
+    id = SerialField()
+    name = TextField(unique=True)
     timezone = TimeZoneField()
 
-
-class Store(Model):
+class Categories(Model):
+    id = SerialField()
+    parent_id = ForeignKey("Self", nullable=True, on_delete=ReferentialAction.CASCADE)
     name = TextField()
-    city_id = ForeignKey(City)
+
+class Shops(Model):
+    id = SerialField()
+    city_id = ForeignKey(Cities, on_delete=ReferentialAction.CASCADE)
+    name = TextField()
     open_at = TimeField()
     close_at = TimeField()
 
     @classmethod
     def is_open_now(cls):
-        local_now = Now().at_timezone(City.timezone).cast(TimeField)
+        local_now = Now().at_timezone(Cities.timezone).cast(TimeField)
 
         # 2. Обычная смена (08:00 - 22:00)
         normal = (
@@ -41,3 +43,25 @@ class Store(Model):
         )
 
         return normal | night
+
+class Users(Model):
+    id = SerialField()
+    name = TextField()
+    birth_date = DateField()
+    tags = ArrayField(TextField()) 
+    metadata = JSONBField()
+
+
+class Sales(Model):
+    id = SerialField()
+    shop_id = ForeignKey(Shops, on_delete=ReferentialAction.CASCADE)
+    category_id = ForeignKey(Categories, on_delete=ReferentialAction.CASCADE)
+    amount = DecimalField(precision=12, scale=2)
+    created_at = TimestampField(auto_now=True)
+
+
+class Stores(Model):
+    name = TextField()
+    city_id = ForeignKey(Cities)
+    open_at = TimeField()
+    close_at = TimeField()

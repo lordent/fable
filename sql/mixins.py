@@ -10,9 +10,6 @@ from .core import Expr
 from .db import Engine, _session_ctx
 from .types import with_type
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger("sql_builder.analyzer")
 
 
@@ -32,8 +29,18 @@ class ExecutableMixin(with_type(Expr)):
                 "Запрос не привязан ни к одной модели (relations is empty)"
             )
 
-        any_model = next(iter(self.relations))
-        app_name = any_model._app.name
+        app = None
+
+        for model in self.relations:
+            if app := getattr(model, "_app", None):
+                break
+
+        if not app:
+            raise RuntimeError(
+                "Запрос не привязан ни к одной модели (relations is empty)"
+            )
+
+        app_name = app.name
         engine = Engine.get_active()
 
         conn, is_internal = await self._get_connection(app_name)
@@ -52,14 +59,27 @@ class ExecutableMixin(with_type(Expr)):
     async def _explain_and_analyze(
         self, conn: asyncpg.Connection, sql: str, params: list[Any]
     ):
+        is_in_transaction = conn.is_in_transaction()
+        
         try:
+            if not is_in_transaction:
+                await conn.execute("BEGIN")
+            else:
+                await conn.execute(f"SAVEPOINT advisor_{id(self)}")
+
             explain_query = f"EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {sql}"
             raw_plan = await conn.fetchval(explain_query, *params)
-
+            
             plan = json.loads(raw_plan)[0]
             self._analyze_plan(sql, plan)
+
         except Exception as e:
-            logger.warning(f"Failed to auto-explain query: {e}")
+            logger.warning(f"Advisor failed: {e}")
+        finally:
+            if not is_in_transaction:
+                await conn.execute("ROLLBACK")
+            else:
+                await conn.execute(f"ROLLBACK TO SAVEPOINT advisor_{id(self)}")
 
     def _analyze_plan(self, sql: str, plan_data: dict):
         issues = []

@@ -4,7 +4,7 @@ import re
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Self, cast
 
-from .core import Expr, Q, SqlType
+from .core import Expr, Q, SqlType, Now, Extract, Func
 
 if TYPE_CHECKING:
     from .model import Model
@@ -50,16 +50,23 @@ class Field(Expr):
             return instance.__dict__.get(self.name)
 
         clone = object.__new__(self.__class__)
-        clone.name = self.name
-        clone.pk = self.pk
-        clone.nullable = self.nullable
-        clone.unique = self.unique
-        clone.default = self.default
-        clone.index = self.index
+        
+        all_slots = set()
+        for cls in self.__class__.__mro__:
+            slots = getattr(cls, "__slots__", [])
+            if isinstance(slots, str):
+                slots = [slots]
+            all_slots.update(slots)
+
+        for slot in all_slots:
+            if hasattr(self, slot):
+                setattr(clone, slot, getattr(self, slot))
+
         clone.model = owner
         clone.relations = {owner}
-        clone.is_aggregate = False
         clone._window = None
+        clone.is_aggregate = False
+        
         return cast(Self, clone)
 
     def compile(self, params: list[Any]) -> str:
@@ -89,10 +96,13 @@ class Field(Expr):
 
 
 class TextField(Field):
+    __slots__ = ("similarity_threshold", )
+
     sql_type = SqlType.TEXT
 
     def __init__(self, similarity_threshold: float = 0.3, **kwargs):
         super().__init__(**kwargs)
+
         self.similarity_threshold = similarity_threshold
 
     def similar(self, other: Any, threshold: float | None = None) -> Q:
@@ -145,7 +155,6 @@ class TimestampField(Field):
     def __init__(self, auto_now: bool = False, **kwargs):
         super().__init__(**kwargs)
         if auto_now:
-            from .core import Now
 
             self.default = Now()
 
@@ -176,3 +185,32 @@ class ForeignKey(Field):
     def __set_name__(self, owner: type[Model], name: str):
         super().__set_name__(owner, name)
         owner._foreign_fields[name] = self
+
+
+class NumericField(Field):
+    sql_type = SqlType.NUMERIC
+
+    def __init__(self, precision: int = 10, scale: int = 2, **kwargs):
+        super().__init__(**kwargs)
+
+        self.sql_type = f"NUMERIC({precision}, {scale})"
+
+
+class DecimalField(NumericField):
+    pass
+
+
+class DateField(Field):
+    sql_type = SqlType.DATE
+
+    @property
+    def age(self) -> Expr:
+        return Extract(Func("YEAR FROM AGE", self))
+
+    @property
+    def year(self) -> Expr:
+        return Extract(Func("YEAR FROM", self))
+
+    @property
+    def month(self) -> Expr:
+        return Extract(Func("MONTH FROM", self))
