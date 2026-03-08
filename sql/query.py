@@ -1,50 +1,93 @@
-from typing import Any, Self, cast
+from __future__ import annotations
 
-from .core import Expr, Q
+from typing import Any, Self, TypeVar, cast
+
+from .core import Cast, Expr, OrderBy, Q
 from .field import Field
-from .mixins import SelectValuesMixin
-from .model import Model
+from .model import Model, QueryModel
+
+T = TypeVar("T", bound="Model")
 
 
-class List(SelectValuesMixin, Expr):
-    def _json_build_recursive(self, fields: dict, params: list) -> str:
+class SelectValuesMixin(Expr):
+    __slots__ = ("_values",)
+
+    def __init__(self, *args: Field, **kwargs: Expr | Any):
+        super().__init__()
+
+        self._values: dict[str, Expr | Any] = {}
+        self.values(*args, **kwargs)
+
+    def values(self, *args: Field, **kwargs: Expr | Any) -> Self:
+        for f in args:
+            if not isinstance(f, Field):
+                raise ValueError(
+                    f"Аргумент {f} должен быть Field. Для выражений используйте kwargs."
+                )
+            self._values[f.name] = f
+            self.relations |= f.relations
+
+        for alias, v in kwargs.items():
+            self._values[alias] = v
+            if hasattr(v, "relations"):
+                self.relations |= cast(Expr, v).relations
+
+        return self
+
+
+class List(SelectValuesMixin):
+    """
+    Агрегация строк в JSONB массив объектов.
+    SQL: COALESCE(JSONB_AGG(JSONB_BUILD_OBJECT(...)), '[]')
+    """
+
+    __slots__ = ()
+
+    def __init__(self, *args: Field, **kwargs: Expr | Any):
+        super().__init__(*args, **kwargs)
+        self.is_aggregate = True
+
+    def _json_build_recursive(self, fields: dict, params: list[Any]) -> str:
         tokens = []
         for name, value in fields.items():
             tokens.append(f"'{name}'")
-            if isinstance(value, Expr):
-                tokens.append(value.compile(params))
-            elif isinstance(value, dict):
-                tokens.append(self._json_build_recursive(value, params))
-            else:
-                params.append(value)
-                tokens.append(f"${len(params)}")
+            tokens.append(self._compile_val(value, params))
         return f"JSONB_BUILD_OBJECT({', '.join(tokens)})"
 
-    def compile(self, params: list) -> str:
-        sql = self._json_build_recursive(self._values, params)
-        return f"COALESCE(JSONB_AGG({sql}), '[]'::jsonb)"
+    def compile(self, params: list[Any]) -> str:
+        inner_json = self._json_build_recursive(self._values, params)
+        return f"COALESCE(JSONB_AGG({inner_json}), '[]'::jsonb)"
 
 
-class Select(SelectValuesMixin, Expr):
-    def __init__(self, *args: Field, **kwargs: Expr):
-        super().__init__()
-        self._joins: dict[type[Model], Expr] = {}
-        self._filters: Q | None = None
-        self._group_by = []
-        self.values(*args, **kwargs)
+class Select(SelectValuesMixin):
+    __slots__ = ("_joins", "_where", "_having", "_order_by", "_limit", "_offset")
+
+    def __init__(self, *args: Field, **kwargs: Expr | Any):
+        self._joins: dict[type[Model], Q] = {}
+        self._where: Q | None = None
+        self._having: Q | None = None
+        self._order_by: list[OrderBy] = []
+        self._limit: int | None = None
+        self._offset: int | None = None
+
+        super().__init__(*args, **kwargs)
 
     def filter(self, expr: Q) -> Self:
-        self._filters = (self._filters & expr) if self._filters else expr
+        """Авто-распределение: агрегаты в HAVING, остальное в WHERE."""
+        if expr.is_aggregate:
+            self._having = (self._having & expr) if self._having else expr
+        else:
+            self._where = (self._where & expr) if self._where else expr
         self.relations |= expr.relations
         return self
 
-    def join(self, target: type[Model], on: Expr | None = None) -> Self:
+    def join(self, target: type[Model], on: Q | None = None) -> Self:
+        """Smart Join: поиск связи через ForeignKey."""
         if on is None:
             for field in target._foreign_fields.values():
                 if field.to in self.relations:
                     on = field == field.to.id
                     break
-
             if not on:
                 for rel in self.relations:
                     for field in rel._foreign_fields.values():
@@ -55,72 +98,119 @@ class Select(SelectValuesMixin, Expr):
                         break
 
         if not on:
-            raise Exception(
-                f"No relation link found between {target._alias} and existing tables"
-            )
+            raise ValueError(f"Связь для {target._alias} не найдена.")
 
         self._joins[target] = on
         self.relations |= {target} | on.relations
         return self
 
-    def compile(self, params: list) -> str:
-        has_agg = any(isinstance(v, List) for v in self._values.values())
+    def order_by(self, *exprs: Expr | OrderBy) -> Self:
+        for e in exprs:
+            self._order_by.append(e if isinstance(e, OrderBy) else e.asc())
+            self.relations |= e.relations
+        return self
+
+    def limit(self, val: int) -> Self:
+        self._limit = val
+        return self
+
+    def offset(self, val: int) -> Self:
+        self._offset = val
+        return self
+
+    def as_table(self, target: str | type[T] | None = None) -> type[T] | type[Model]:
+        if isinstance(target, type) and issubclass(target, Model):
+            return cast(type[T], type(target.__name__, (target,), {"_table": self}))
+
+        dynamic_fields = {}
+        for alias, expr in self._values.items():
+            field_meta: Field | None = None
+            if isinstance(expr, Cast) and expr.field_instance:
+                field_meta = expr.field_instance
+            elif isinstance(expr, Field):
+                field_meta = expr
+
+            source_f = field_meta if field_meta else Field()
+
+            f_clone = object.__new__(source_f.__class__)
+            all_slots = set()
+            for cls in source_f.__class__.__mro__:
+                slots = getattr(cls, "__slots__", [])
+                if isinstance(slots, str):
+                    slots = [slots]
+                all_slots.update(slots)
+
+            for slot in all_slots:
+                if hasattr(source_f, slot):
+                    setattr(f_clone, slot, getattr(source_f, slot))
+
+            f_clone.name = alias
+            f_clone.relations = set()
+            f_clone.is_aggregate = False
+
+            dynamic_fields[alias] = f_clone
+
+        alias = target if isinstance(target, str) else f"sub_{id(self)}"
+        return type(
+            alias, (QueryModel,), {"_table": self, "_alias": alias, **dynamic_fields}
+        )
+
+    def compile(self, params: list[Any]) -> str:
+        has_aggregate = any(
+            getattr(v, "is_aggregate", False) for v in self._values.values()
+        )
 
         cols = []
         group_by = []
 
-        for name, expr in self._values.items():
-            is_expr = isinstance(expr, Expr)
-            val_sql = expr.compile(params) if is_expr else str(expr)
-            if has_agg and isinstance(expr, Field):
-                group_by.append(val_sql)
+        for alias, expr in self._values.items():
+            val_sql = self._compile_val(expr, params)
 
-            if isinstance(expr, Field) and expr.name == name:
-                cols.append(val_sql)
-            else:
-                cols.append(f"{val_sql} AS {name}")
+            if has_aggregate and hasattr(expr, "is_aggregate"):
+                e = cast(Expr, expr)
+                if not e.is_aggregate and not getattr(e, "_window", None):
+                    group_by.append(val_sql)
 
-        from_rels = self.relations - set(self._joins.keys())
+            cols.append(f'{val_sql} AS "{alias}"')
 
-        def fmt(m: type[Model]):
-            t = m._table
-            if isinstance(t, Select):
-                return f'({t.compile(params)}) AS "{m._alias}"'
-            return f'"{t}" AS "{m._alias}"' if m._alias != t else f'"{t}"'
+        joined_models = set(self._joins.keys())
+        main_models = [m for m in self.relations if m not in joined_models]
 
         sql = [f"SELECT {', '.join(cols)}"]
-
-        if from_rels:
-            sql.append(f"FROM {', '.join(fmt(m) for m in from_rels)}")
+        if main_models:
+            sql.append(
+                f"FROM {', '.join(self._fmt_table(m, params) for m in main_models)}"
+            )
 
         for target, on in self._joins.items():
-            sql.append(f"JOIN {fmt(target)} ON {on.compile(params)}")
+            sql.append(
+                f"JOIN {self._fmt_table(target, params)} ON {on.compile(params)}"
+            )
 
-        if self._filters:
-            sql.append(f"WHERE {self._filters.compile(params)}")
+        if self._where:
+            sql.append(f"WHERE {self._where.compile(params)}")
 
         if group_by:
             sql.append(f"GROUP BY {', '.join(dict.fromkeys(group_by))}")
 
+        if self._having:
+            sql.append(f"HAVING {self._having.compile(params)}")
+
+        if self._order_by:
+            sql.append(
+                f"ORDER BY {', '.join(e.compile(params) for e in self._order_by)}"
+            )
+
+        if self._limit is not None:
+            sql.append(f"LIMIT {self._limit}")
+        if self._offset is not None:
+            sql.append(f"OFFSET {self._offset}")
+
         return " ".join(sql)
 
-    def as_table(self, alias: str = None) -> type[Model]:
-        alias = alias or f"_t{id(self)}"
-        fields = {name: Field() for name in self._values.keys()}
-        sub_cls = type(
-            alias,
-            (Model,),
-            {
-                "_table": self,
-                "_alias": alias,
-                **fields,
-            },
+    def _fmt_table(self, m: type[Model] | type[QueryModel], params: list[Any]) -> str:
+        if hasattr(m._table, "compile"):
+            return f'({m._table.compile(params)}) AS "{m._alias}"'
+        return (
+            f'"{m._table}" AS "{m._alias}"' if m._alias != m._table else f'"{m._table}"'
         )
-        return cast(type[Model], sub_cls)
-
-    def prepare(self) -> tuple[str, list[Any]]:
-        params = []
-        return self.compile(params), params
-
-    def __repr__(self) -> str:
-        return self.compile([])

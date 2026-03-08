@@ -1,23 +1,97 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Self, cast
 
 if TYPE_CHECKING:
     from .field import Field
     from .model import Model
 
 
+class SqlType(StrEnum):
+    TEXT = "TEXT"
+    INT = "INTEGER"
+    BIGINT = "BIGINT"
+    JSONB = "JSONB"
+    UUID = "UUID"
+    TIMESTAMP = "TIMESTAMP"
+    TIMESTAMPTZ = "TIMESTAMP WITH TIME ZONE"
+    TIME = "TIME"
+    DATE = "DATE"
+    BOOL = "BOOLEAN"
+    NUMERIC = "NUMERIC"
+
+
 class Expr:
+    __slots__ = ("relations", "is_aggregate", "_window")
+
     relations: set[type[Model]]
 
-    def __init__(self, relations: set[type[Model]] | None = None):
+    def __init__(
+        self, relations: set[type[Model]] | None = None, is_aggregate: bool = False
+    ):
         self.relations = relations or set()
+        self.is_aggregate = is_aggregate
+        self._window: Window | None = None
 
-    # Сравнение
+    def compile(self, params: list[Any]) -> str:
+        raise NotImplementedError
+
+    def prepare(self) -> tuple[str, list[Any]]:
+        params: list[Any] = []
+        sql = self.compile(params)
+        return sql, params
+
+    def over(self, partition_by: Any = None, order_by: Any = None) -> Self:
+        self._window = Window(partition_by, order_by)
+        self.is_aggregate = False
+        return self
+
+    def at_timezone(self, zone: str | Expr) -> AtTimeZone:
+        return AtTimeZone(self, zone)
+
+    def cast(self, to: str | SqlType | type[Field] | Field) -> Cast:
+        field_instance: Field | None = None
+        if hasattr(to, "sql_type"):
+            f = cast("Field", to)
+            target_type = f.sql_type
+            field_instance = f
+        elif isinstance(to, type) and hasattr(to, "sql_type"):
+            field_instance = cast("Field", to())
+            target_type = field_instance.sql_type
+        else:
+            target_type = to.value if isinstance(to, SqlType) else str(to)
+        return Cast(self, target_type, field_instance=field_instance)
+
+    def asc(self) -> OrderBy:
+        return OrderBy(self, "ASC")
+
+    def desc(self) -> OrderBy:
+        return OrderBy(self, "DESC")
+
+    def _compile_val(self, v: Any, params: list[Any]) -> str:
+        if hasattr(v, "compile"):
+            return cast(Expr, v).compile(params)
+        if v is None:
+            return "NULL"
+        params.append(v)
+        return f"${len(params)}"
+
     def __eq__(self, other: Any) -> Q:
+        if other is None:
+            return Q("IS NULL", self, None)
+        if isinstance(other, (list, tuple)):
+            return Q("IN", self, other)
+
+        from .query import Select
+
+        if isinstance(other, Select):
+            return Q("= ANY", self, other)
         return Q("=", self, other)
 
     def __ne__(self, other: Any) -> Q:
+        if other is None:
+            return Q("IS NOT NULL", self, None)
         return Q("!=", self, other)
 
     def __lt__(self, other: Any) -> Q:
@@ -32,123 +106,198 @@ class Expr:
     def __ge__(self, other: Any) -> Q:
         return Q(">=", self, other)
 
-    # Логика
     def __and__(self, other: Any) -> Q:
         return Q("AND", self, other)
 
     def __or__(self, other: Any) -> Q:
         return Q("OR", self, other)
 
-    # Арифметика и спец-операторы
     def __add__(self, other: Any) -> Q:
         return Q("+", self, other)
 
-    def __radd__(self, other: Any) -> Q:
-        return Q("+", other, self)
+    def __sub__(self, other: Any) -> Q:
+        return Q("-", self, other)
+
+    def __mul__(self, other: Any) -> Q:
+        return Q("*", self, other)
+
+    def __truediv__(self, other: Any) -> Q:
+        return Q("/", self, other)
 
     def __mod__(self, other: Any) -> Q:
-        return Q("~", self, other)
+        return Q("<->", self, other)
 
-    def at_timezone(self, tz: Any) -> AtTimeZoneExpr:
-        return AtTimeZoneExpr(self, tz)
-
-    def cast(self, to: str | type[Field]) -> Cast:
-        return Cast(self, to)
-
-    def _compile_param(self, v: Any, params: list[Any]) -> str:
-        if isinstance(v, Expr):
-            return v.compile(params)
-        params.append(v)
-        return f"${len(params)}"
-
-    def compile(self, params: list[Any]) -> str:
-        raise NotImplementedError
-
-
-class Cast(Expr):
-    def __init__(self, wrapped: Expr, to: str | type[Field]):
-        self.target_type = to.sql_type if hasattr(to, "sql_type") else str(to)
-        super().__init__(relations=wrapped.relations)
-
-        self.wrapped = wrapped
-
-    def compile(self, params: list) -> str:
-        return f"({self.wrapped.compile(params)})::{self.target_type}"
-
-
-class AtTimeZoneExpr(Expr):
-    def __init__(self, wrapped: Expr, tz: Any):
-        rels = wrapped.relations | (tz.relations if isinstance(tz, Expr) else set())
-        super().__init__(relations=rels)
-
-        self.wrapped = wrapped
-        self.tz = tz
-
-    def compile(self, params: list) -> str:
-        return (
-            f"({self.wrapped.compile(params)} "
-            f"AT TIME ZONE {self._compile_param(self.tz, params)})"
-        )
-
-
-class Q(Expr):
-    def __init__(self, op: str, left: Any, right: Any):
-        rels = set()
-        if isinstance(left, Expr):
-            rels |= left.relations
-        if isinstance(right, Expr):
-            rels |= right.relations
-        super().__init__(relations=rels)
-        self.op, self.left, self.right = op, left, right
-
-    def compile(self, params: list[Any]) -> str:
-        return (
-            f"({self._compile_param(self.left, params)} "
-            f"{self.op} "
-            f"{self._compile_param(self.right, params)})"
-        )
-
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         return self.compile([])
 
 
-class Now(Expr):
-    def compile(self, params: list) -> str:
-        return "CURRENT_TIMESTAMP"
+class Q(Expr):
+    __slots__ = ("op", "left", "right")
+
+    def __init__(self, op: str, left: Any, right: Any = None):
+        is_aggregate = any(getattr(x, "is_aggregate", False) for x in (left, right))
+        rels: set[type[Model]] = set()
+        for x in (left, right):
+            if hasattr(x, "relations"):
+                rels |= cast(Expr, x).relations
+        super().__init__(relations=rels, is_aggregate=is_aggregate)
+        self.op, self.left, self.right = op, left, right
+
+    def compile(self, params: list[Any]) -> str:
+        l_sql = self._compile_val(self.left, params) if self.left is not None else ""
+
+        if self.op == "[]":
+            return f"{l_sql}[{self._compile_val(self.right, params)}]"
+
+        if self.op == "IN":
+            if not self.right:
+                return "(1=0)"
+            placeholders = ", ".join([self._compile_val(v, params) for v in self.right])
+            return f"({l_sql} IN ({placeholders}))"
+
+        if self.op == "= ANY":
+            return f"({l_sql} = ANY({self._compile_val(self.right, params)}))"
+
+        r_sql = self._compile_val(self.right, params) if self.right is not None else ""
+        if not l_sql:
+            return f"({self.op} {r_sql})"
+        if not r_sql:
+            return f"({l_sql} {self.op})"
+        return f"({l_sql} {self.op} {r_sql})"
 
 
 class Func(Expr):
-    def __init__(self, name: str, arg: Any, is_distinct: bool = False):
-        rels = arg.relations if isinstance(arg, Expr) else set()
-        super().__init__(relations=rels)
+    __slots__ = ("name", "args", "is_distinct")
 
-        self.name = name
-        self.arg = arg
-        self.is_distinct = is_distinct
+    def __init__(
+        self,
+        name: str,
+        *args: Any,
+        is_aggregate: bool = False,
+        is_distinct: bool = False,
+    ):
+        rels: set[type[Model]] = set()
+        for a in args:
+            if hasattr(a, "relations"):
+                rels |= cast(Expr, a).relations
+        super().__init__(relations=rels, is_aggregate=is_aggregate)
+        self.name, self.args, self.is_distinct = name, args, is_distinct
 
-    def distinct(self) -> Func:
-        return Func(self.name, self.arg, is_distinct=True)
+    def distinct(self) -> Self:
+        self.is_distinct = True
+        return self
 
     def compile(self, params: list[Any]) -> str:
-        distinct_str = "DISTINCT " if self.is_distinct else ""
-        return f"{self.name}({distinct_str}{self._compile_param(self.arg, params)})"
+        d = "DISTINCT " if self.is_distinct else ""
+        args_sql = ", ".join(
+            "*" if a == "*" else self._compile_val(a, params) for a in self.args
+        )
+        base = f"{self.name}({d}{args_sql})"
+        return f"{base} OVER ({self._window.compile(params)})" if self._window else base
 
 
-def Count(arg: Any = "*") -> Func:
-    return Func("COUNT", arg)
+class Window:
+    __slots__ = ("partition_by", "order_by")
+
+    def __init__(self, partition_by: Any = None, order_by: Any = None):
+        self.partition_by = (
+            partition_by
+            if isinstance(partition_by, (list, tuple))
+            else ([partition_by] if partition_by else [])
+        )
+        self.order_by = (
+            order_by
+            if isinstance(order_by, (list, tuple))
+            else ([order_by] if order_by else [])
+        )
+
+    def compile(self, params: list[Any]) -> str:
+        parts = []
+        if self.partition_by:
+            sql = ", ".join(
+                cast(Expr, p).compile(params) if hasattr(p, "compile") else str(p)
+                for p in self.partition_by
+            )
+            parts.append(f"PARTITION BY {sql}")
+        if self.order_by:
+            sql = ", ".join(
+                cast(Expr, o).compile(params) if hasattr(o, "compile") else str(o)
+                for o in self.order_by
+            )
+            parts.append(f"ORDER BY {sql}")
+        return " ".join(parts)
+
+
+class OrderBy(Expr):
+    __slots__ = ("wrapped", "direction")
+
+    def __init__(self, wrapped: Expr, direction: str):
+        super().__init__(relations=wrapped.relations)
+        self.wrapped, self.direction = wrapped, direction
+
+    def compile(self, params: list) -> str:
+        return f"{self.wrapped.compile(params)} {self.direction}"
+
+
+class Cast(Expr):
+    __slots__ = ("wrapped", "to", "field_instance")
+
+    def __init__(self, wrapped: Expr, to: str, field_instance: Field | None = None):
+        super().__init__(relations=wrapped.relations, is_aggregate=wrapped.is_aggregate)
+        self.wrapped, self.to, self.field_instance = wrapped, to, field_instance
+
+    def compile(self, params: list) -> str:
+        return f"({self.wrapped.compile(params)})::{self.to}"
+
+
+class AtTimeZone(Expr):
+    __slots__ = ("wrapped", "zone")
+
+    def __init__(self, wrapped: Expr, zone: str | Expr):
+        rels = wrapped.relations.copy()
+        if hasattr(zone, "relations"):
+            rels |= cast(Expr, zone).relations
+        super().__init__(relations=rels, is_aggregate=wrapped.is_aggregate)
+        self.wrapped, self.zone = wrapped, zone
+
+    def compile(self, params: list[Any]) -> str:
+        return (
+            f"({self.wrapped.compile(params)} "
+            f"AT TIME ZONE {self._compile_val(self.zone, params)})"
+        )
+
+
+def Count(arg: Any = "*", distinct: bool = False) -> Func:
+    return Func("COUNT", arg, is_aggregate=True, is_distinct=distinct)
 
 
 def Sum(arg: Any) -> Func:
-    return Func("SUM", arg)
-
-
-def Min(arg: Any) -> Func:
-    return Func("MIN", arg)
-
-
-def Max(arg: Any) -> Func:
-    return Func("MAX", arg)
+    return Func("SUM", arg, is_aggregate=True)
 
 
 def Avg(arg: Any) -> Func:
-    return Func("AVG", arg)
+    return Func("AVG", arg, is_aggregate=True)
+
+
+def Min(arg: Any) -> Func:
+    return Func("MIN", arg, is_aggregate=True)
+
+
+def Max(arg: Any) -> Func:
+    return Func("MAX", arg, is_aggregate=True)
+
+
+def Rank() -> Func:
+    return Func("RANK")
+
+
+def DenseRank() -> Func:
+    return Func("DENSE_RANK")
+
+
+def RowNumber() -> Func:
+    return Func("ROW_NUMBER")
+
+
+def Now() -> Func:
+    return Func("NOW")
