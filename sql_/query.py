@@ -10,15 +10,13 @@ T = TypeVar("T", bound="Model")
 
 
 class SelectValuesQuery(Expr):
-    __slots__ = ("_values",)
-
-    def __init__(self, *args: Field, **kwargs: Expr | Any):
+    def __init__(self, *args: Field, **kwargs: Any):
         super().__init__()
-        self._values: dict[str, Expr | Any] = {}
+        self._values: dict[str, Any] = {}
         if args or kwargs:
             self.values(*args, **kwargs)
 
-    def values(self, *args: Field, **kwargs: Expr | Any) -> Self:
+    def values(self, *args: Field, **kwargs: Any) -> Self:
         for f in args:
             if not isinstance(f, Field):
                 raise ValueError(
@@ -37,7 +35,7 @@ class SelectValuesQuery(Expr):
 class List(SelectValuesQuery):
     __slots__ = ()
 
-    def __init__(self, *args: Field, **kwargs: Expr | Any):
+    def __init__(self, *args: Field, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.is_aggregate = True
 

@@ -5,9 +5,18 @@ from contextvars import ContextVar, Token
 import asyncpg
 from asyncpg.transaction import Transaction
 
-_session_ctx: ContextVar[asyncpg.Connection | None] = ContextVar(
-    "session_ctx", default=None
+_sessions_ctx: ContextVar[dict[str, asyncpg.Connection] | None] = ContextVar(
+    "sessions_ctx", default=None
 )
+
+
+def get_sessions() -> dict[str, asyncpg.Connection]:
+    sessions = _sessions_ctx.get()
+    return sessions if sessions is not None else {}
+
+
+def get_session(app_name: str) -> asyncpg.Connection | None:
+    return get_sessions().get(app_name)
 
 
 class Config:
@@ -28,14 +37,13 @@ class Engine:
         Engine._active = self
 
     def is_debug(self, app_name: str) -> bool:
-        return self._configs[app_name].debug
+        cfg = self._configs.get(app_name)
+        return cfg.debug if cfg else False
 
     @classmethod
     def get_active(cls) -> Engine:
         if cls._active is None:
-            raise RuntimeError(
-                "Engine не инициализирован. Создайте Engine([DBConfig(...)]) на старте."
-            )
+            raise RuntimeError("Engine не инициализирован.")
         return cls._active
 
     async def get_connection(self, app_name: str) -> asyncpg.Connection:
@@ -57,7 +65,8 @@ class TransactionContext:
         self._is_owner: bool = False
 
     async def __aenter__(self) -> asyncpg.Connection:
-        existing_conn = _session_ctx.get()
+        current_sessions = get_sessions().copy()
+        existing_conn = current_sessions.get(self.app_name)
 
         if existing_conn:
             self.conn = existing_conn
@@ -66,10 +75,12 @@ class TransactionContext:
             return self.conn
 
         self.conn = await Engine.get_active().get_connection(self.app_name)
+
         self.transaction = self.conn.transaction()
         await self.transaction.start()
 
-        self._token = _session_ctx.set(self.conn)
+        current_sessions[self.app_name] = self.conn
+        self._token = _sessions_ctx.set(current_sessions)
         self._is_owner = True
         return self.conn
 
@@ -78,15 +89,37 @@ class TransactionContext:
             if exc_type:
                 if self._is_owner and self.transaction:
                     await self.transaction.rollback()
-                elif self.checkpoint:
+                elif self.checkpoint and self.conn:
                     await self.conn.execute(f"ROLLBACK TO SAVEPOINT sp_{id(self)}")
             else:
                 if self._is_owner and self.transaction:
                     await self.transaction.commit()
-                elif self.checkpoint:
+                elif self.checkpoint and self.conn:
                     await self.conn.execute(f"RELEASE SAVEPOINT sp_{id(self)}")
         finally:
             if self._is_owner:
-                await self.conn.close()
+                if self.conn:
+                    await self.conn.close()
                 if self._token:
-                    _session_ctx.reset(self._token)
+                    _sessions_ctx.reset(self._token)
+
+
+class ConnectionManager:
+    def __init__(self, app_name: str):
+        self.app_name = app_name
+        self.conn = None
+        self.is_internal = False
+
+    async def __aenter__(self) -> asyncpg.Connection:
+        self.conn = get_session(self.app_name)
+        if self.conn:
+            self.is_internal = False
+            return self.conn
+
+        self.is_internal = True
+        self.conn = await Engine.get_active().get_connection(self.app_name)
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.is_internal and self.conn:
+            await self.conn.close()

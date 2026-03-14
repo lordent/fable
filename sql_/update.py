@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Self, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Self, cast
+
 from .core import Expr, Q
-from .mixins import ExecutableMixin
 from .field import Field
+from .mixins import ExecutableMixin
 
 if TYPE_CHECKING:
     from .model import Model
@@ -22,8 +23,10 @@ class Update(ExecutableMixin, Expr):
     def set(self, **kwargs: Any) -> Self:
         for key, value in kwargs.items():
             if key not in self.model_cls._fields:
-                raise AttributeError(f"Поле '{key}' не найдено в {self.model_cls.__name__}")
-            
+                raise AttributeError(
+                    f"Поле '{key}' не найдено в {self.model_cls.__name__}"
+                )
+
             self._values[key] = value
             if hasattr(value, "relations"):
                 self.relations |= cast(Expr, value).relations
@@ -52,21 +55,22 @@ class Update(ExecutableMixin, Expr):
 
         target_alias = self.model_cls._alias
         sql = [f'UPDATE "{self.model_cls._table}" AS "{target_alias}"']
-        sql.append(f'SET {", ".join(set_parts)}')
+        sql.append(f"SET {', '.join(set_parts)}")
 
         from_models = [
-            m for m in self.relations 
+            m
+            for m in self.relations
             if m != self.model_cls and not getattr(m, "_virtual", False)
         ]
         if from_models:
             from_parts = [f'"{m._table}" AS "{m._alias}"' for m in from_models]
-            sql.append(f'FROM {", ".join(from_parts)}')
+            sql.append(f"FROM {', '.join(from_parts)}")
 
         if self._where:
             sql.append(f"WHERE {self._where.compile(params)}")
 
         prefix = f'"{target_alias}".' if from_models else ""
-        
+
         if self._returning:
             cols = ", ".join(f'{prefix}"{f.name}"' for f in self._returning)
             sql.append(f"RETURNING {cols}")

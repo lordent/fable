@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Self, TypedDict, cast
 from enum import StrEnum
+from typing import Any, Self, TypedDict, cast
 
 from .core import Cast, Expr, OrderBy, Q
 from .field import Field
@@ -9,11 +9,13 @@ from .mixins import ExecutableMixin
 from .model import Model, QueryModel
 from .query import SelectValuesQuery
 
+
 class JoinStrategy(StrEnum):
     LEFT = "JOIN"
     INNER = "INNER JOIN"
     RIGHT = "RIGHT JOIN"
     FULL = "FULL OUTER JOIN"
+
 
 class LockDict(TypedDict):
     mode: str
@@ -21,14 +23,17 @@ class LockDict(TypedDict):
     nowait: bool
     skip_locked: bool
 
+
 class SummaryDict(TypedDict):
     mode: str
     fields: list[Expr | Field]
+
 
 class GroupMode(StrEnum):
     ROLLUP = "ROLLUP"
     CUBE = "CUBE"
     SETS = "GROUPING SETS"
+
 
 class JoinDict(TypedDict):
     on: Q
@@ -81,11 +86,10 @@ class Select(ExecutableMixin, SelectValuesQuery):
     ) -> Self:
         return self._set_lock("FOR SHARE", of, nowait, skip_locked)
 
-    def summary(self, *fields: Field | Expr, mode: GroupMode = GroupMode.ROLLUP) -> Self:
-        self._summary = {
-            "mode": mode,
-            "fields": list(fields)
-        }
+    def summary(
+        self, *fields: Field | Expr, mode: GroupMode = GroupMode.ROLLUP
+    ) -> Self:
+        self._summary = {"mode": mode, "fields": list(fields)}
         for f in fields:
             if hasattr(f, "relations"):
                 self.relations |= f.relations
@@ -99,7 +103,12 @@ class Select(ExecutableMixin, SelectValuesQuery):
         self.relations |= expr.relations
         return self
 
-    def join(self, target: type[Model], on: Q | None = None, strategy: JoinStrategy = JoinStrategy.LEFT) -> Self:
+    def join(
+        self,
+        target: type[Model],
+        on: Q | None = None,
+        strategy: JoinStrategy = JoinStrategy.LEFT,
+    ) -> Self:
         if on is None:
             for field in target._foreign_fields.values():
                 if field.to in self.relations:
@@ -174,17 +183,17 @@ class Select(ExecutableMixin, SelectValuesQuery):
         has_aggregate = any(
             getattr(v, "is_aggregate", False) for v in self._values.values()
         )
-        
+
         cols, group_by = [], []
 
         for alias, expr in self._values.items():
             val_sql = self._compile_val(expr, params)
-            
+
             if has_aggregate and hasattr(expr, "is_aggregate"):
                 e = cast(Expr, expr)
                 if not e.is_aggregate and not getattr(e, "_window", None):
                     group_by.append(val_sql)
-            
+
             cols.append(f'{val_sql} AS "{alias}"')
 
         if has_aggregate and self._order_by:
@@ -194,38 +203,44 @@ class Select(ExecutableMixin, SelectValuesQuery):
                     group_by.append(ob_sql)
 
         sql = [f"SELECT {', '.join(cols)}"]
-        
+
         joined_models = set(self._joins.keys())
         main_models = [m for m in self.relations if m not in joined_models]
-        
+
         if main_models:
-            sql.append(f"FROM {', '.join(self._fmt_table(m, params) for m in main_models)}")
+            sql.append(
+                f"FROM {', '.join(self._fmt_table(m, params) for m in main_models)}"
+            )
 
         for target, join_data in self._joins.items():
             strategy = join_data["strategy"].value
             on_sql = join_data["on"].compile(params)
-            sql.append(
-                f"{strategy} {self._fmt_table(target, params)} ON {on_sql}"
-            )
+            sql.append(f"{strategy} {self._fmt_table(target, params)} ON {on_sql}")
 
         if self._where:
             sql.append(f"WHERE {self._where.compile(params)}")
-        
+
         manual_group_sql = [self._compile_val(f, params) for f in self._group_by_manual]
-        
+
         final_group_list = group_by + manual_group_sql
 
         if final_group_list:
             group_fields_unique = list(dict.fromkeys(final_group_list))
-            
+
             if self._summary:
                 summary = self._summary
-                summary_sql_list = [self._compile_val(f, params) for f in summary["fields"]]
-                
-                regular_group = [f for f in group_fields_unique if f not in summary_sql_list]
-                
-                summary_clause = f"{summary['mode'].value}({', '.join(summary_sql_list)})"
-                
+                summary_sql_list = [
+                    self._compile_val(f, params) for f in summary["fields"]
+                ]
+
+                regular_group = [
+                    f for f in group_fields_unique if f not in summary_sql_list
+                ]
+
+                summary_clause = (
+                    f"{summary['mode'].value}({', '.join(summary_sql_list)})"
+                )
+
                 if regular_group:
                     sql.append(f"GROUP BY {', '.join(regular_group)}, {summary_clause}")
                 else:
@@ -237,7 +252,9 @@ class Select(ExecutableMixin, SelectValuesQuery):
             sql.append(f"HAVING {self._having.compile(params)}")
 
         if self._order_by:
-            sql.append(f"ORDER BY {', '.join(e.compile(params) for e in self._order_by)}")
+            sql.append(
+                f"ORDER BY {', '.join(e.compile(params) for e in self._order_by)}"
+            )
 
         if self._limit is not None:
             sql.append(f"LIMIT {self._limit}")
@@ -248,7 +265,7 @@ class Select(ExecutableMixin, SelectValuesQuery):
             lock = self._lock
             parts = [lock["mode"]]
             if lock["of"]:
-                parts.append(f"OF {', '.join(f'\"{m._alias}\"' for m in lock['of'])}")
+                parts.append(f"OF {', '.join(f'"{m._alias}"' for m in lock['of'])}")
             if lock["nowait"]:
                 parts.append("NOWAIT")
             elif lock["skip_locked"]:

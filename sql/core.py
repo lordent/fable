@@ -1,372 +1,309 @@
-from __future__ import annotations
-
-import inspect
-import re
-
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Self, cast
+from string.templatelib import Template
+from typing import TYPE_CHECKING, Any
+
+from sql.enums import SqlType, Types
 
 if TYPE_CHECKING:
-    from .field import Field
+    from .fields import Field
     from .model import Model
 
 
-class SqlType(StrEnum):
-    TEXT = "TEXT"
-    INT = "INTEGER"
-    BIGINT = "BIGINT"
-    JSONB = "JSONB"
-    UUID = "UUID"
-    TIMESTAMP = "TIMESTAMP"
-    TIMESTAMPTZ = "TIMESTAMP WITH TIME ZONE"
-    TIME = "TIME"
-    DATE = "DATE"
-    BOOL = "BOOLEAN"
-    NUMERIC = "NUMERIC"
+def _extract_template(value: Template):
+    for i, s in enumerate(value.strings):
+        if s:
+            yield s
+        if i < len(value.interpolations):
+            yield value.interpolations[i].value
 
 
-class Expr:
-    __slots__ = ("relations", "is_aggregate", "_window")
+class S:
+    relations: set[Model]
 
-    relations: set[type[Model]]
+    def __init__(self):
+        self.relations = set()
 
-    def __init__(
-        self, relations: set[type[Model]] | None = None, is_aggregate: bool = False
-    ):
-        self.relations = relations or set()
-        self.is_aggregate = is_aggregate
-        self._window: Window | None = None
+    def _value(self, value: Any, params: list[Any]) -> str:
+        if isinstance(value, Template):
+            value = Concat(*_extract_template(value))
 
-    def compile(self, params: list[Any]) -> str:
-        raise NotImplementedError
+        if isinstance(value, S):
+            # self.relations |= value.relations
+            return value.__sql__(params)
 
-    def prepare(self) -> tuple[str, list[Any]]:
-        params: list[Any] = []
-        sql = self.compile(params)
-        return sql, params
-
-    def over(self, partition_by: Any = None, order_by: Any = None) -> Self:
-        self._window = Window(partition_by, order_by)
-        self.is_aggregate = False
-        return self
-
-    def at_timezone(self, zone: str | Expr) -> AtTimeZone:
-        return AtTimeZone(self, zone)
-
-    def cast(self, to: str | SqlType | type[Field] | Field) -> Cast:
-        field_instance: Field | None = None
-        if hasattr(to, "sql_type"):
-            f = cast("Field", to)
-            target_type = f.sql_type
-            field_instance = f
-        elif isinstance(to, type) and hasattr(to, "sql_type"):
-            field_instance = cast("Field", to())
-            target_type = field_instance.sql_type
-        else:
-            target_type = to.value if isinstance(to, SqlType) else str(to)
-        return Cast(self, target_type, field_instance=field_instance)
-
-    def asc(self) -> OrderBy:
-        return OrderBy(self, "ASC")
-
-    def desc(self) -> OrderBy:
-        return OrderBy(self, "DESC")
-
-    def _compile_val(self, v: Any, params: list[Any]) -> str:
-        if hasattr(v, "compile"):
-            return cast(Expr, v).compile(params)
-        if v is None:
+        if value is None:
             return "NULL"
-        params.append(v)
+
+        params.append(value)
         return f"${len(params)}"
 
-    def __eq__(self, other: Any) -> Q:
-        if other is None:
-            return Q("IS NULL", self, None)
-        if isinstance(other, (list, tuple)):
-            return Q("IN", self, other)
+    def __sql__(self, params: list[Any]) -> str:
+        raise NotImplementedError()
 
-        from .select import Select
+    def prepare(self):
+        params = []
+        yield self.__sql__(params)
+        yield from params
 
-        if isinstance(other, Select):
-            return Q("= ANY", self, other)
-        return Q("=", self, other)
-
-    def __ne__(self, other: Any) -> Q:
-        if other is None:
-            return Q("IS NOT NULL", self, None)
-        return Q("!=", self, other)
-
-    def __lt__(self, other: Any) -> Q:
-        return Q("<", self, other)
-
-    def __le__(self, other: Any) -> Q:
-        return Q("<=", self, other)
-
-    def __gt__(self, other: Any) -> Q:
-        return Q(">", self, other)
-
-    def __ge__(self, other: Any) -> Q:
-        return Q(">=", self, other)
-
-    def __and__(self, other: Any) -> Q:
-        return Q("AND", self, other)
-
-    def __or__(self, other: Any) -> Q:
-        return Q("OR", self, other)
-
-    def __add__(self, other: Any) -> Q:
-        return Q("+", self, other)
-
-    def __sub__(self, other: Any) -> Q:
-        return Q("-", self, other)
-
-    def __mul__(self, other: Any) -> Q:
-        return Q("*", self, other)
-
-    def __truediv__(self, other: Any) -> Q:
-        return Q("/", self, other)
-
-    def __mod__(self, other: Any) -> Q:
-        return Q("<->", self, other)
-
-    def __str__(self) -> str:
-        return self.compile([])
+    def __str__(self):
+        return self.__sql__([])
 
 
-class Q(Expr):
-    __slots__ = ("op", "left", "right")
-
-    def __init__(self, op: str, left: Any, right: Any = None):
-        is_aggregate = any(getattr(x, "is_aggregate", False) for x in (left, right))
-        rels: set[type[Model]] = set()
-        for x in (left, right):
-            if hasattr(x, "relations"):
-                rels |= cast(Expr, x).relations
-        super().__init__(relations=rels, is_aggregate=is_aggregate)
-        self.op, self.left, self.right = op, left, right
-
-    def compile(self, params: list[Any]) -> str:
-        l_sql = self._compile_val(self.left, params) if self.left is not None else ""
-
-        if self.op == "[]":
-            return f"{l_sql}[{self._compile_val(self.right, params)}]"
-
-        if self.op == "IN":
-            if not self.right:
-                return "(1=0)"
-            placeholders = ", ".join([self._compile_val(v, params) for v in self.right])
-            return f"({l_sql} IN ({placeholders}))"
-
-        if self.op == "= ANY":
-            return f"({l_sql} = ANY({self._compile_val(self.right, params)}))"
-
-        r_sql = self._compile_val(self.right, params) if self.right is not None else ""
-        if not l_sql:
-            return f"({self.op} {r_sql})"
-        if not r_sql:
-            return f"({l_sql} {self.op})"
-        return f"({l_sql} {self.op} {r_sql})"
-
-
-class Func(Expr):
-    __slots__ = ("name", "args", "is_distinct")
+class E(S):
+    sql_type: SqlType | None
 
     def __init__(
         self,
-        name: str,
-        *args: Any,
+        sql_type: SqlType | None = None,
         is_aggregate: bool = False,
-        is_distinct: bool = False,
     ):
-        rels: set[type[Model]] = set()
-        for a in args:
-            if hasattr(a, "relations"):
-                rels |= cast(Expr, a).relations
-        super().__init__(relations=rels, is_aggregate=is_aggregate)
-        self.name, self.args, self.is_distinct = name, args, is_distinct
+        super().__init__()
 
-    def distinct(self) -> Self:
-        self.is_distinct = True
-        return self
+        self.sql_type = sql_type
+        self.is_aggregate = is_aggregate
 
-    def compile(self, params: list[Any]) -> str:
-        d = "DISTINCT " if self.is_distinct else ""
-        args_sql = ", ".join(self._compile_val(a, params) for a in self.args)
-        base = f"{self.name}({d}{args_sql})"
-        return f"{base} OVER ({self._window.compile(params)})" if self._window else base
+    # --- Логические операции ---
+
+    def __and__(self, other: Any) -> Q:
+        return Q(self, "AND", other, sql_type=Types.BOOLEAN)
+
+    def __or__(self, other: Any) -> Q:
+        return Q(self, "OR", other, sql_type=Types.BOOLEAN)
+
+    def __invert__(self) -> Q:
+        return Q(None, "NOT", self, sql_type=Types.BOOLEAN)
+
+    # --- Сравнение ---
+
+    def __eq__(self, other: Any) -> Q:
+        if other is None:
+            return Q(self, "IS NULL", None)
+        if isinstance(other, (list, tuple)):
+            return Q(self, "IN", other)
+        if isinstance(other, Query):
+            return Q(self, "= ANY", other)
+        return Q(self, "=", other, sql_type=Types.BOOLEAN)
+
+    def __ne__(self, other: Any) -> Q:
+        if other is None:
+            return Q(self, "IS NOT NULL", None)
+        return Q(self, "!=", other, sql_type=Types.BOOLEAN)
+
+    def __lt__(self, other: Any) -> Q:
+        return Q(self, "<", other, sql_type=Types.BOOLEAN)
+
+    def __le__(self, other: Any) -> Q:
+        return Q(self, "<=", other, sql_type=Types.BOOLEAN)
+
+    def __gt__(self, other: Any) -> Q:
+        return Q(self, ">", other, sql_type=Types.BOOLEAN)
+
+    def __ge__(self, other: Any) -> Q:
+        return Q(self, ">=", other, sql_type=Types.BOOLEAN)
+
+    # --- Арифметика ---
+
+    def __add__(self, other: Any) -> Q:
+        return Q(self, "+", other, sql_type=self.sql_type)
+
+    def __sub__(self, other: Any) -> Q:
+        return Q(self, "-", other, sql_type=self.sql_type)
+
+    def __mul__(self, other: Any) -> Q:
+        return Q(self, "*", other, sql_type=self.sql_type)
+
+    def __truediv__(self, other: Any) -> Q:
+        return Q(self, "/", other, sql_type=self.sql_type)
+
+    def __mod__(self, other: Any) -> Q:
+        return Q(self, "%", other, sql_type=self.sql_type)
+
+    # --- Сортировка ---
+
+    def asc(self) -> OrderBy:
+        return OrderBy(self, OrderDirections.ASC)
+
+    def desc(self) -> OrderBy:
+        return OrderBy(self, OrderDirections.DESC)
+
+    # --- Разное ---
+
+    def cast(self, to: str | E):
+        return Cast(self, to)
+
+    def __rshift__(self, to: str | SqlType | type[Field] | Field):
+        return self.cast(to)
+
+    def at_timezone(self, zone: str | E):
+        return AtTimeZone(self, zone)
 
 
-class Window:
-    __slots__ = ("partition_by", "order_by")
+class Q(E):
+    def __init__(self, left: Any, op: str, right: Any, sql_type: SqlType | None = None):
+        super().__init__(sql_type=sql_type)
+        if isinstance(left, E):
+            self.relations |= left.relations
+        if isinstance(right, E):
+            self.relations |= right.relations
 
-    def __init__(self, partition_by: Any = None, order_by: Any = None):
-        self.partition_by = (
+        self.left = left
+        self.op = op
+        self.right = right
+
+    def __sql__(self, params: list[Any]):
+        l_sql = self._value(self.left, params)
+
+        if "ANY" in self.op:
+            r_sql = f"({self._value(self.right, params)})"
+        elif self.op == "IN" and isinstance(self.right, (list, tuple)):
+            r_sql = f"({', '.join(self._value(x, params) for x in self.right)})"
+        else:
+            r_sql = self._value(self.right, params)
+
+        return f"({l_sql} {self.op} {r_sql})"
+
+
+class W(S):
+    def __init__(
+        self,
+        partition_by: list[E] | E | None = None,
+        order_by: list[OrderBy | E] | OrderBy | None = None,
+    ):
+        super().__init__()
+        self._partition_by = (
             partition_by
-            if isinstance(partition_by, (list, tuple))
+            if isinstance(partition_by, list)
             else ([partition_by] if partition_by else [])
         )
-        self.order_by = (
-            order_by
-            if isinstance(order_by, (list, tuple))
-            else ([order_by] if order_by else [])
+        self._order_by = (
+            order_by if isinstance(order_by, list) else ([order_by] if order_by else [])
         )
 
-    def compile(self, params: list[Any]) -> str:
+        for part in self._partition_by:
+            if isinstance(part, E):
+                self.relations |= part.relations
+        for order in self._order_by:
+            if isinstance(order, E):
+                self.relations |= order.relations
+
+    def __sql__(self, params: list[Any]) -> str:
         parts = []
-        if self.partition_by:
-            sql = ", ".join(
-                cast(Expr, p).compile(params) if hasattr(p, "compile") else str(p)
-                for p in self.partition_by
+        if self._partition_by:
+            p_sql = ", ".join(self._value(p, params) for p in self._partition_by)
+            parts.append(f"PARTITION BY {p_sql}")
+
+        if self._order_by:
+            o_sql = ", ".join(
+                o.__sql__(params) if isinstance(o, OrderBy) else o.asc().__sql__(params)
+                for o in self._order_by
             )
-            parts.append(f"PARTITION BY {sql}")
-        if self.order_by:
-            sql = ", ".join(
-                cast(Expr, o).compile(params) if hasattr(o, "compile") else str(o)
-                for o in self.order_by
-            )
-            parts.append(f"ORDER BY {sql}")
+            parts.append(f"ORDER BY {o_sql}")
+
         return " ".join(parts)
 
 
-class OrderBy(Expr):
-    __slots__ = ("wrapped", "direction")
+class Func(E):
+    def __init__(
+        self, name: str, *args, sql_type: SqlType | None = None, is_aggregate=False
+    ):
+        super().__init__(sql_type=sql_type, is_aggregate=is_aggregate)
+        self.name = name.upper()
+        self.args = args
+        self.window: W | None = None
+        for arg in args:
+            if isinstance(arg, S):
+                self.relations |= arg.relations
 
-    def __init__(self, wrapped: Expr, direction: str):
-        super().__init__(relations=wrapped.relations)
+    def over(self, partition_by=None, order_by=None):
+        self.window = W(partition_by, order_by)
+        self.relations |= self.window.relations
+        return self
+
+    def _render_args(self, params: list[Any]) -> str:
+        if self.name == "EXTRACT" and len(self.args) == 2:
+            return f"{self.args[0]} FROM {self._value(self.args[1], params)}"
+        return ", ".join(self._value(arg, params) for arg in self.args)
+
+    def __sql__(self, params: list[Any]) -> str:
+        sql = f"{self.name}({self._render_args(params)})"
+        if self.window:
+            sql = f"{sql} OVER ({self.window.__sql__(params)})"
+        return sql
+
+
+class OrderDirections(StrEnum):
+    DESC = "DESC"
+    ASC = "ASC"
+
+
+class OrderBy(S):
+    def __init__(self, wrapped: S, direction: OrderDirections):
+        super().__init__()
+
+        self.relations |= wrapped.relations
         self.wrapped, self.direction = wrapped, direction
 
-    def compile(self, params: list) -> str:
-        return f"{self.wrapped.compile(params)} {self.direction}"
+    def __sql__(self, params: list[Any]):
+        return f"{self.wrapped.__sql__(params)} {self.direction.value}"
 
 
-class Cast(Expr):
-    __slots__ = ("wrapped", "to", "field_instance")
+class AtTimeZone(E):
+    def __init__(self, wrapped: E, zone: str | E):
+        super().__init__(is_aggregate=wrapped.is_aggregate)
 
-    def __init__(self, wrapped: Expr, to: str, field_instance: Field | None = None):
-        super().__init__(relations=wrapped.relations, is_aggregate=wrapped.is_aggregate)
-        self.wrapped, self.to, self.field_instance = wrapped, to, field_instance
+        self.relations |= wrapped.relations
+        if isinstance(zone, E):
+            self.relations |= zone.relations
 
-    def compile(self, params: list) -> str:
-        return f"({self.wrapped.compile(params)})::{self.to}"
-
-
-class AtTimeZone(Expr):
-    __slots__ = ("wrapped", "zone")
-
-    def __init__(self, wrapped: Expr, zone: str | Expr):
-        rels = wrapped.relations.copy()
-        if hasattr(zone, "relations"):
-            rels |= cast(Expr, zone).relations
-        super().__init__(relations=rels, is_aggregate=wrapped.is_aggregate)
         self.wrapped, self.zone = wrapped, zone
 
-    def compile(self, params: list[Any]) -> str:
+    def __sql__(self, params: list[Any]) -> str:
         return (
-            f"({self.wrapped.compile(params)} "
-            f"AT TIME ZONE {self._compile_val(self.zone, params)})"
+            f"({self.wrapped.__sql__(params)} "
+            f"AT TIME ZONE {self._value(self.zone, params)})"
         )
 
 
-class SQLInterpolation(Expr):
-    __slots__ = ("_raw_tpl", "_params_map")
+class Cast(E):
+    def __init__(self, wrapped: E, to: str | E):
+        super().__init__(is_aggregate=wrapped.is_aggregate)
 
-    def __init__(self, tpl: str, params_map: dict[str, Any]):
-        rels = set()
-        for v in params_map.values():
-            r = getattr(v, "relations", None)
-            if isinstance(r, set):
-                rels |= r
-            elif isinstance(v, type) and hasattr(v, "_table"):
-                rels.add(v)
+        self.relations |= wrapped.relations
+        self.to = to
+        self.wrapped = wrapped
 
-        super().__init__(relations=rels)
-        self._raw_tpl = tpl
-        self._params_map = params_map
+    def __sql__(self, params: list) -> str:
+        to = self.to
+        if isinstance(to, E):
+            to = to.sql_type
+        return f"({self.wrapped.__sql__(params)})::{to}"
 
-    def _resolve_value(self, path: str, params: list[Any]) -> str:
-        parts = path.split('.')
-        root_name = parts[0]
-        
-        obj = self._params_map.get(root_name)
-        if obj is None:
-            return f"'{{{path}}}'"
 
-        current = obj
-        try:
-            for part in parts[1:]:
-                current = getattr(current, part)
-        except AttributeError:
-            return f"'{{{path}}}'"
+class Concat(E):
+    def __init__(self, *args: Any):
+        super().__init__(sql_type=Types.TEXT)
 
-        return self._compile_val(current, params)
+        self.args = list(self._extract(args))
 
-    def compile(self, params: list[Any]) -> str:
-        pattern = re.compile(r'\{([\w\.]+)\}')
-        parts = []
-        last_pos = 0
+    def _extract(self, args: list[Any]):
+        for arg in args:
+            if isinstance(arg, E):
+                self.relations |= arg.relations
+                yield arg
 
-        for match in pattern.finditer(self._raw_tpl):
-            static = self._raw_tpl[last_pos:match.start()]
-            if static:
-                safe_static = static.replace("'", "''")
-                parts.append(f"'{safe_static}'")
-            
-            path = match.group(1)
-            parts.append(self._resolve_value(path, params))
-            
-            last_pos = match.end()
+            elif isinstance(arg, Template):
+                yield from self._extract(_extract_template(arg))
 
-        tail = self._raw_tpl[last_pos:]
-        if tail:
-            parts.append(f"'{tail.replace("'", "''")}'")
+            else:
+                yield arg
 
-        if len(parts) == 1 and parts[0].startswith("'"):
-            return parts[0]
-
+    def __sql__(self, params: list[Any]):
+        parts = [self._value(arg, params) for arg in self.args]
         return f"({' || '.join(parts)})"
 
 
-def concat(text: str) -> SQLInterpolation:
-    frame = inspect.currentframe().f_back
-    return SQLInterpolation(text, frame.f_locals | frame.f_globals)
+class Query(S):
+    def __init__(self):
+        super().__init__()
 
-
-def Count(arg: Any = "*", distinct: bool = False) -> Func:
-    return Func("COUNT", arg, is_aggregate=True, is_distinct=distinct)
-
-
-def Sum(arg: Any) -> Func:
-    return Func("SUM", arg, is_aggregate=True)
-
-
-def Avg(arg: Any) -> Func:
-    return Func("AVG", arg, is_aggregate=True)
-
-
-def Min(arg: Any) -> Func:
-    return Func("MIN", arg, is_aggregate=True)
-
-
-def Max(arg: Any) -> Func:
-    return Func("MAX", arg, is_aggregate=True)
-
-
-def Rank() -> Func:
-    return Func("RANK")
-
-
-def DenseRank() -> Func:
-    return Func("DENSE_RANK")
-
-
-def RowNumber() -> Func:
-    return Func("ROW_NUMBER")
-
-
-def Now() -> Func:
-    return Func("NOW")
-
-
-def Extract(arg: Any) -> Func:
-    return Func("EXTRACT", arg)
+        self._values: dict[str, Any] = {}

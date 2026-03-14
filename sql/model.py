@@ -1,52 +1,48 @@
-from __future__ import annotations
-
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Self, TypeVar
+
+from .fields import BigSerialField, Field, ForeignField
 
 if TYPE_CHECKING:
-    from .query import Select
+    from .queries.base import QueryBuilder
 
-from .app import Application, get_app_for_module
-from .db import TransactionContext
-from .field import Field, ForeignKey, SerialField
-
-T = TypeVar("T", bound="Model")
+M = TypeVar("M", bound="Model")
 
 
 class ModelMeta(type):
     def __new__(mcs, name: str, bases: tuple[type[Model], ...], attrs: dict[str, Any]):
-        fields: dict[str, Field] = {}
-        foreign_fields: dict[str, ForeignKey] = {}
-
-        for base in bases:
-            if hasattr(base, "_fields"):
-                fields.update(base._fields)
-            if hasattr(base, "_foreign_fields"):
-                foreign_fields.update(base._foreign_fields)
-
         attrs.setdefault("_table", name.lower())
         attrs.setdefault("_alias", name)
-        attrs["_fields"] = fields
-        attrs["_foreign_fields"] = foreign_fields
+        attrs.setdefault("_fields", {})
+        attrs.setdefault("_foreign_fields", {})
 
         cls: type[Model] = super().__new__(mcs, name, bases, attrs)
 
-        if not cls._app and not cls._virtual and bases:
-            cls._app = get_app_for_module(cls.__module__)
+        parent_fields: dict[str, Field]
+
+        for base in cls.__mro__[1:]:
+            if parent_fields := getattr(base, "_fields", None):
+                for name, attr in parent_fields.items():
+                    if name not in cls._fields:
+                        attr.bind(cls, name)
+
+        # if not cls._app and not cls._virtual and bases:
+        #     cls._app = get_app_for_module(cls.__module__)
 
         return cls
 
-    def __getitem__(cls: type[T], alias: str) -> type[T]:
-        return cast(type[T], type(cls.__name__, (cls,), {"_alias": alias, "_app": cls._app}))
+    def __getitem__(cls: type[M], alias: str) -> type[M]:
+        return cls.as_alias(alias)
 
-    def __iter__(cls: type[T]) -> Iterator[Field]:
+    def __iter__(cls: type[M]) -> Iterator[Field]:
         for field in cls._fields.values():
             yield getattr(cls, field.name)
 
-    def __hash__(cls: type[T]) -> int:
+    def __hash__(cls: type[M]) -> int:
         return hash(cls._alias)
 
-    def __eq__(cls: type[T], other: type[Model]) -> bool:
+    def __eq__(cls: type[M], other: type[Model]) -> bool:
         if not isinstance(other, ModelMeta):
             return False
         return cls._table == other._table and cls._alias == other._alias
@@ -54,36 +50,41 @@ class ModelMeta(type):
 
 class Model(metaclass=ModelMeta):
     _virtual = False
-    _app: Application = None
     _table: str
-    _alias: str
-    _fields: dict[str, Field]
-    _foreign_fields: dict[str, ForeignKey]
+    _alias: str | None = None
+    _fields: dict[str, Field] = {}
+    _foreign_fields: dict[str, ForeignField[Model]] = {}
 
-    id = SerialField()
-
-    @classmethod
-    def atomic(cls, checkpoint: bool = True):
-        return TransactionContext(cls._app.name, checkpoint)
+    id = BigSerialField()
 
     @classmethod
-    def __indexes__(cls):
-        return []
+    @lru_cache(maxsize=128)
+    def as_alias(cls: type[Self], alias: str) -> type[Self]:
+        return type(f"{cls.__name__}_{alias}", (cls,), {"_alias": alias})
 
     @classmethod
-    def __constraints__(cls):
-        return []
-
-    def __init__(self, **kwargs: Any):
-        """Для создания экземпляров: user = User(id=1, name='Bob')"""
-        for key, value in kwargs.items():
-            if key in self._fields:
-                self.__dict__[key] = value
-
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} table={self._table} alias={self._alias}>"
+    def __sql__(cls: type[Self], params: list[Any]) -> str:
+        if issubclass(cls, QueryModel):
+            return f'({cls._query.__sql__(params)}) AS "{cls._alias}"'
+        return (
+            f'"{cls._table}" AS "{cls._alias}"'
+            if cls._alias != cls._table
+            else f'"{cls._table}"'
+        )
 
 
 class QueryModel(Model):
     _virtual = True
-    _table: Select
+    _query: QueryBuilder
+
+    @classmethod
+    def factory(cls, query: QueryBuilder):
+        alias = f"sub{id(query)}"
+        initial = {"_alias": alias, "_query": query}
+        cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
+        for name, value in query._values.items():
+            if isinstance(value, Field):
+                value.bind(cls, name)
+            else:
+                Field().bind(cls, name)
+        return cls

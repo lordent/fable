@@ -4,7 +4,7 @@ import re
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Self, cast
 
-from .core import Expr, Q, SqlType, Now, Extract, Func
+from .core import Expr, Extract, Func, Now, Q, SqlType
 
 if TYPE_CHECKING:
     from .model import Model
@@ -50,7 +50,7 @@ class Field(Expr):
             return instance.__dict__.get(self.name)
 
         clone = object.__new__(self.__class__)
-        
+
         all_slots = set()
         for cls in self.__class__.__mro__:
             slots = getattr(cls, "__slots__", [])
@@ -66,7 +66,7 @@ class Field(Expr):
         clone.relations = {owner}
         clone._window = None
         clone.is_aggregate = False
-        
+
         return cast(Self, clone)
 
     def compile(self, params: list[Any]) -> str:
@@ -94,9 +94,12 @@ class Field(Expr):
     def __str__(self):
         return self.compile([])
 
+    def __hash__(self):
+        return hash((self.model, self.name))
+
 
 class TextField(Field):
-    __slots__ = ("similarity_threshold", )
+    __slots__ = ("similarity_threshold",)
 
     sql_type = SqlType.TEXT
 
@@ -155,7 +158,6 @@ class TimestampField(Field):
     def __init__(self, auto_now: bool = False, **kwargs):
         super().__init__(**kwargs)
         if auto_now:
-
             self.default = Now()
 
 

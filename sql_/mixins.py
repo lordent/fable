@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import asyncpg
 
 from .core import Expr
-from .db import Engine, _session_ctx
+from .db import Engine, get_session
 from .types import with_type
 
 logger = logging.getLogger("sql_builder.analyzer")
 
 
 class ExecutableMixin(with_type(Expr)):
-    async def _get_connection(self, app_name: str):
-        conn = _session_ctx.get()
+    async def _get_connection(self, app_name: str) -> tuple[asyncpg.Connection, bool]:
+        conn = get_session(app_name)
         if conn:
             return conn, False
         return await Engine.get_active().get_connection(app_name), True
@@ -23,32 +23,25 @@ class ExecutableMixin(with_type(Expr)):
     def __await__(self):
         return self.execute().__await__()
 
-    async def execute(self) -> list[dict[str, Any]]:
-        if not self.relations:
-            raise RuntimeError(
-                "Запрос не привязан ни к одной модели (relations is empty)"
-            )
-
-        app = None
-
-        for model in self.relations:
-            if app := getattr(model, "_app", None):
-                break
+    async def execute(self) -> list[asyncpg.Record]:
+        app = next(
+            (
+                getattr(m, "_app", None)
+                for m in self.relations
+                if getattr(m, "_app", None)
+            ),
+            None,
+        )
 
         if not app:
-            raise RuntimeError(
-                "Запрос не привязан ни к одной модели (relations is empty)"
-            )
+            raise RuntimeError(f"Application не найден для {self.relations}")
 
-        app_name = app.name
-        engine = Engine.get_active()
-
-        conn, is_internal = await self._get_connection(app_name)
+        conn, is_internal = await self._get_connection(app.name)
 
         try:
             sql, params = self.prepare()
 
-            if engine.is_debug(app_name):
+            if Engine.get_active().is_debug(app.name):
                 await self._explain_and_analyze(conn, sql, params)
 
             return await conn.fetch(sql, *params)
@@ -60,7 +53,7 @@ class ExecutableMixin(with_type(Expr)):
         self, conn: asyncpg.Connection, sql: str, params: list[Any]
     ):
         is_in_transaction = conn.is_in_transaction()
-        
+
         try:
             if not is_in_transaction:
                 await conn.execute("BEGIN")
@@ -69,7 +62,7 @@ class ExecutableMixin(with_type(Expr)):
 
             explain_query = f"EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {sql}"
             raw_plan = await conn.fetchval(explain_query, *params)
-            
+
             plan = json.loads(raw_plan)[0]
             self._analyze_plan(sql, plan)
 
