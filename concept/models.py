@@ -25,7 +25,7 @@ class Cities(Model):
 
 class Categories(Model):
     id = SerialField()
-    # parent_id = ForeignField("Self", nullable=True, on_delete=ReferentialAction.CASCADE)
+    parent_id = ForeignField("Self", on_delete=ReferentialAction.CASCADE)
     name = TextField()
 
 

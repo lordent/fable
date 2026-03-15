@@ -1,11 +1,9 @@
-import copy
 from collections.abc import Callable
 from enum import StrEnum
-from functools import cached_property
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar, cast
 
-from sql.core import Concat, E, Func, Q
+from sql.core import Concat, E, FieldFactory, Func, Q
 from sql.enums import SqlType, Types
 from sql.func import Extract
 
@@ -28,31 +26,6 @@ class FieldMeta(type):
         return cast(F, FieldFactory(cls, args, kwargs))
 
 
-class FieldFactory(E):
-    def __init__(self, field_cls: type[Field], args: tuple, kwargs: dict):
-        self.field_cls, self.args, self.kwargs = field_cls, args, kwargs
-
-    def factory(self, owner: type[Model] = None, name: str = None):
-        try:
-            instance: Field = type.__call__(
-                self.field_cls, *copy.deepcopy(self.args), **copy.deepcopy(self.kwargs)
-            )
-            instance.bind = self.factory
-            if owner and name:
-                setattr(owner, name, instance)
-                instance.__set_name__(owner, name)
-            return instance
-        except NameError:
-            pass
-
-    def __set_name__(self, owner: type[Model], name: str):
-        return self.factory(owner, name)
-
-    @cached_property
-    def sql_type(self):
-        return self.factory().sql_type
-
-
 class Field(E, metaclass=FieldMeta):
     sql_type: SqlType = Types.TEXT
 
@@ -66,20 +39,30 @@ class Field(E, metaclass=FieldMeta):
     def __sql__(self, params: list[Any]) -> str:
         return f'"{self.model._alias}"."{self.name}"'
 
+    def __hash__(self):
+        return hash((self.model, self.name))
+
 
 class ForeignField[M: type["Model"]](Field):
     to: type[Model]
     sql_type = Types.BIGINT
 
     def __init__(
-        self, to: M, on_delete: ReferentialAction = ReferentialAction.CASCADE, **kwargs
+        self,
+        to: M | Literal["Self"],
+        on_delete: ReferentialAction = ReferentialAction.CASCADE,
+        **kwargs,
     ):
         super().__init__(**kwargs)
+
         self.to = to
         self.on_delete = on_delete
 
     def __set_name__(self, owner: type[Model], name: str):
         super().__set_name__(owner, name)
+
+        if self.to == "Self":
+            self.to = self.model
 
         owner._foreign_fields[name] = self
 
@@ -92,18 +75,27 @@ class ArrayField[F: "Field"](Field):
 
 
 class ComputedField(Field):
+    expression: E
+
     def __init__(self, expression: Callable[[], Q | Template] | Q | Template, **kwargs):
         super().__init__(**kwargs)
 
-        expression = expression() if callable(expression) else expression
+        self.expression = None
+        self._expression = expression
 
-        if isinstance(expression, Template):
-            expression = Concat(expression)
+    def __get__(self, instance, owner: type[Model]):
+        if not self.expression:
+            expression = self._expression
+            expression = expression() if callable(expression) else expression
 
-        self.is_aggregate = expression.is_aggregate
-        self.relations |= expression.relations
-        self.sql_type = expression.sql_type or self.sql_type
-        self.expression = expression
+            if isinstance(expression, Template):
+                expression = Concat(expression)
+
+            self.is_aggregate = expression.is_aggregate
+            self.relations |= expression.relations
+            self.sql_type = expression.sql_type or self.sql_type
+            self.expression = expression
+        return self
 
     def __sql__(self, params: list[Any]) -> str:
         return self.expression.__sql__(params)
@@ -157,9 +149,16 @@ class DecimalField(NumericField):
 
 
 class TextField(Field):
-    def __init__(self, max_length: int | None = None, **kwargs):
+    def __init__(
+        self, max_length: int | None = None, similarity_threshold: float = 0.3, **kwargs
+    ):
         sql_type = Types.VARCHAR(max_length) if max_length else Types.TEXT
         super().__init__(sql_type=sql_type, **kwargs)
+
+        self.similarity_threshold = similarity_threshold
+
+    def similar(self, other: Any, threshold: float | None = None) -> Q:
+        return (self % other) < (threshold or self.similarity_threshold)
 
 
 class CharField(Field):

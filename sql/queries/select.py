@@ -107,11 +107,13 @@ class Select(SelectValuesQuery):
     ) -> Self:
         if not on:
             for field in target._foreign_fields.values():
-                if (to := field.to) in self.relations:
+                if (to := field.to) in self.relations and to != target:
                     on = field == cast(Model, to).id
                     break
             if not on:
                 for rel in self.relations:
+                    if rel == target:
+                        continue
                     for field in rel._foreign_fields.values():
                         if field.to == target:
                             on = field == target.id

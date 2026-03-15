@@ -2,6 +2,9 @@ from collections.abc import Iterator
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
+from sql.app import Application, get_app_for_module
+from sql.db import ConnectionManager, TransactionContext
+
 from .fields import BigSerialField, Field, ForeignField
 
 if TYPE_CHECKING:
@@ -16,6 +19,7 @@ class ModelMeta(type):
         attrs.setdefault("_alias", name)
         attrs.setdefault("_fields", {})
         attrs.setdefault("_foreign_fields", {})
+        attrs.setdefault("_app", None)
 
         cls: type[Model] = super().__new__(mcs, name, bases, attrs)
 
@@ -27,8 +31,8 @@ class ModelMeta(type):
                     if name not in cls._fields:
                         attr.bind(cls, name)
 
-        # if not cls._app and not cls._virtual and bases:
-        #     cls._app = get_app_for_module(cls.__module__)
+        if not cls._app and not cls._virtual and bases:
+            cls._app = get_app_for_module(cls.__module__)
 
         return cls
 
@@ -49,6 +53,7 @@ class ModelMeta(type):
 
 
 class Model(metaclass=ModelMeta):
+    _app: Application
     _virtual = False
     _table: str
     _alias: str | None = None
@@ -60,7 +65,11 @@ class Model(metaclass=ModelMeta):
     @classmethod
     @lru_cache(maxsize=128)
     def as_alias(cls: type[Self], alias: str) -> type[Self]:
-        return type(f"{cls.__name__}_{alias}", (cls,), {"_alias": alias})
+        return type(
+            f"{cls.__name__}_{alias}",
+            (cls,),
+            {"_alias": alias, "_table": cls._table, "_virtual": True},
+        )
 
     @classmethod
     def __sql__(cls: type[Self], params: list[Any]) -> str:
@@ -71,6 +80,14 @@ class Model(metaclass=ModelMeta):
             if cls._alias != cls._table
             else f'"{cls._table}"'
         )
+
+    @classmethod
+    def atomic(cls, checkpoint: bool = True):
+        return TransactionContext(cls._app.name, checkpoint)
+
+    @classmethod
+    def connection(cls):
+        return ConnectionManager(cls._app.name)
 
 
 class QueryModel(Model):

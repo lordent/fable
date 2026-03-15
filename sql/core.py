@@ -1,3 +1,4 @@
+from copy import deepcopy
 from enum import StrEnum
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Any
@@ -7,6 +8,24 @@ from sql.enums import SqlType, Types
 if TYPE_CHECKING:
     from .fields import Field
     from .model import Model
+
+
+class FieldFactory:
+    def __init__(self, field_cls: type[Field], args: tuple, kwargs: dict):
+        self.field_cls, self.args, self.kwargs = field_cls, args, kwargs
+
+    def factory(self, owner: type[Model] = None, name: str = None):
+        instance: Field = type.__call__(
+            self.field_cls, *deepcopy(self.args), **deepcopy(self.kwargs)
+        )
+        instance.bind = self.factory
+        if owner and name:
+            setattr(owner, name, instance)
+            instance.__set_name__(owner, name)
+        return instance
+
+    def __set_name__(self, owner: type[Model], name: str):
+        self.factory(owner, name)
 
 
 def _extract_template(value: Template):
@@ -28,7 +47,6 @@ class S:
             value = Concat(*_extract_template(value))
 
         if isinstance(value, S):
-            # self.relations |= value.relations
             return value.__sql__(params)
 
         if value is None:
@@ -136,6 +154,9 @@ class E(S):
 
     def at_timezone(self, zone: str | E):
         return AtTimeZone(self, zone)
+
+    def dist(self, other: Any) -> Q:
+        return Q(self, "<->", other, sql_type=Types.DOUBLE_PRECISION)
 
 
 class Q(E):
@@ -265,8 +286,11 @@ class AtTimeZone(E):
 
 
 class Cast(E):
-    def __init__(self, wrapped: E, to: str | E):
+    def __init__(self, wrapped: E, to: str | E | FieldFactory):
         super().__init__(is_aggregate=wrapped.is_aggregate)
+
+        if isinstance(to, FieldFactory):
+            to = to.factory()
 
         self.relations |= wrapped.relations
         self.to = to

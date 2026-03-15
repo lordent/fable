@@ -1,14 +1,14 @@
 import asyncio
 
-from sql.db import Config, Engine
-
-# from sql.queries.dml import Delete, Update
 from concept.models import Categories, Cities, Sales, Shops, Users
-from sql.aggs import Count, Sum, concat
+from sql.aggs import Count, Sum
+from sql.db import Config, Engine
 from sql.fields import DecimalField
 from sql.func import Rank
 from sql.queries.base import Item, List
+from sql.queries.delete import Delete
 from sql.queries.select import JoinStrategy, Select
+from sql.queries.update import Update
 
 Engine(
     Config(
@@ -39,7 +39,7 @@ async def run_test():
         print(f"User: {row['id']} - {row['name']}")
 
     print("\n--- Тест 2. Поиск по триграммам ---")
-    query = Select(Users.id, Users.name).filter(Users.name % "аликсандр" < 0.7)
+    query = Select(Users.id, Users.name).filter(Users.name.dist("аликсандр") < 0.7)
     print(f"SQL запроса:\n{query}")
 
     pro_users = await query
@@ -50,7 +50,7 @@ async def run_test():
         Select(Shops.name, city=List(*Cities)).join(Cities).filter(Shops.is_open_now())
     )
 
-    print(f"SQL запроса:\n{query.compile([])}")
+    print(f"SQL запроса:\n{query}")
 
     results = await query
     print(f"Сейчас открыто магазинов: {len(results)}")
@@ -64,11 +64,12 @@ async def run_test():
         .filter(Categories.parent_id == 2)
         .as_model()
     )
+
     query = Select(Categories.name, sub_name=sub.name).join(
         sub, on=(Categories.parent_id == sub.id)
     )
 
-    print(f"SQL:\n{query.compile([])}")
+    print(f"SQL:\n{query}")
     res = await query
     for row in res:
         print(f"Найдена вложенность: {row['sub_name']} -> {row['name']}")
@@ -82,7 +83,7 @@ async def run_test():
         .order_by(Parent.name)
     )
 
-    print(f"SQL:\n{query.compile([])}")
+    print(f"SQL:\n{query}")
     res = await query
     for row in res:
         print(f"Категория: {row['name']} (Родитель: {row['parent']})")
@@ -95,7 +96,7 @@ async def run_test():
         birth_month=Users.birth_date.month,
     ).order_by(Users.birth_date.desc())
 
-    print(f"SQL:\n{query.compile([])}")
+    print(f"SQL:\n{query}")
     res = await query
     for row in res:
         print(
@@ -104,13 +105,10 @@ async def run_test():
 
     print("\n--- Тест 7. Оконные функции (Sales Analytics) ---")
 
-    # 1. Ранг продажи внутри категории по сумме (от большей к меньшей)
     sale_rank = Rank().over(partition_by=Categories.id, order_by=Sales.amount.desc())
 
-    # 2. Сумма всех продаж в ЭТОЙ категории (окно)
     category_total = Sum(Sales.amount).over(partition_by=Categories.id)
 
-    # 3. Процент конкретной продажи от всей категории
     share = (Sales.amount / category_total * 100) >> DecimalField(5, 2)
 
     query = (
@@ -119,7 +117,7 @@ async def run_test():
         .order_by(Categories.name, sale_rank)
     )
 
-    print(f"SQL:\n{query.compile([])}")
+    print(f"SQL:\n{query}")
     res = await query
 
     print(f"{'Категория':<15} | {'Сумма':<8} | {'Ранг':<5} | {'Доля %'}")
@@ -135,15 +133,15 @@ async def run_test():
         Select(
             shop=Shops.name,
             category=Categories.name,
-            total_sales=Sum(Sales.amount).cast(DecimalField(12, 2)),
+            total_sales=Sum(Sales.amount) >> DecimalField(12, 2),
         )
-        .join(Shops)
+        .join(Sales)
         .join(Categories)
         .summary(Shops.name, Categories.name)
         .order_by(Shops.name.asc(), Categories.name.asc())
     )
 
-    print(f"SQL:\n{query.compile([])}")
+    print(f"SQL:\n{query}")
 
     res = await query
 
@@ -151,11 +149,9 @@ async def run_test():
     print("-" * 50)
 
     for row in res:
-        # Postgres возвращает NULL в полях группировки для строк-итогов
         shop = row["shop"] if row["shop"] else "ИТОГО (ВСЕ)"
         cat = row["category"] if row["category"] else "ВСЕ КАТЕГОРИИ"
 
-        # Визуально выделяем строки итогов
         prefix = ">> " if row["shop"] is None or row["category"] is None else "   "
         print(f"{prefix}{shop:<17} | {cat:<15} | {row['total_sales']:>10}")
 
@@ -172,7 +168,7 @@ async def run_test():
         .order_by(Count(Categories.id).desc())
     )
 
-    print(f"SQL:\n{query.compile([])}")
+    print(f"SQL:\n{query}")
 
     res = await query
 
@@ -186,7 +182,7 @@ async def run_test():
 
     query = (
         Update(Users)
-        .set(name=concat("Vip {Users.name}"))
+        .set(name=t"Vip {Users.name}")
         .filter(
             (Users.id == Sales.id)
             & (Sales.shop_id == Shops.id)
@@ -197,7 +193,7 @@ async def run_test():
         .returning(Users.id, Users.name)
     )
 
-    print(f"Генерируемый SQL:\n{query.compile([])}\n")
+    print(f"Генерируемый SQL:\n{query}\n")
 
     results = await query
 
@@ -210,11 +206,6 @@ async def run_test():
 
     print("\n--- Тест 11. DELETE с автоматическим USING ---")
 
-    # Условие затрагивает Cities, но удаляем из Sales.
-    # Между ними стоит Shops, который не упомянут в filter напрямую.
-    # Но так как Cities.name связан с Shops, а Shops с Sales через FK,
-    # твой механизм relations должен вытащить всю цепочку.
-
     query = (
         Delete(Sales)
         .filter(
@@ -225,9 +216,8 @@ async def run_test():
         .returning(Sales.id, Sales.amount)
     )
 
-    print(f"SQL (The Destroyer):\n{query.compile([])}\n")
+    print(f"SQL (The Destroyer):\n{query}\n")
 
-    # Выполняем. Advisor проверит, не забыли ли мы индексы для такого маневра.
     results = await query
 
     if results:
