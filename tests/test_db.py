@@ -2,6 +2,7 @@ import pytest
 
 from sql.core.aggregates import Avg, Count, Sum
 from sql.fields.fields import DecimalField
+from sql.queries.base import Query
 from sql.queries.select import Select
 from sql.queries.values import Item, List
 
@@ -156,3 +157,25 @@ async def test_json_list_empty_coalesce():
     res = await query
     if res:
         assert res[0]["shops"] == []
+
+
+def test_analyze_plan_logic():
+    q = Query()
+
+    bad_plan = {
+        "Plan": {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 500,
+            "Plan Rows": 5,
+            "Plans": [
+                {
+                    "Node Type": "Sort",
+                    "Sort Method": "external merge",
+                    "Actual Rows": 100,
+                }
+            ],
+        }
+    }
+
+    q._analyze_plan("SELECT * FROM users", bad_plan)
