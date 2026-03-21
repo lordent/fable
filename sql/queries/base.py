@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import asyncpg
 
@@ -55,7 +55,7 @@ class Query(Node):
                 await conn.close()
 
     async def _explain_and_analyze(
-        self, conn: asyncpg.Connection, sql: str, params: list[Any]
+        self, conn: asyncpg.Connection, sql: str, params: list
     ):
         is_in_transaction = conn.is_in_transaction()
         transaction_id = f"advisor_{id(self)}"

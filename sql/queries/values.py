@@ -1,6 +1,6 @@
 from typing import Any
 
-from sql.core.base import Node
+from sql.core.base import Node, QueryContext
 from sql.core.expressions import Expression
 from sql.core.types import Types
 from sql.core.typings import typewith
@@ -32,14 +32,14 @@ class ValuesNodeMixin(typewith(Node)):
 class Item(ValuesNodeMixin, Expression):
     sql_type = Types.JSONB
 
-    def _json_build_recursive(self, fields: dict, params: list[Any]) -> str:
+    def _json_build_recursive(self, fields: dict, context: QueryContext):
         tokens = [
-            f"'{name}', {self._value(value, params)}" for name, value in fields.items()
+            f"'{name}', {self._value(value, context)}" for name, value in fields.items()
         ]
         return f"JSONB_BUILD_OBJECT({', '.join(tokens)})"
 
-    def __sql__(self, params: list[Any]):
-        return self._json_build_recursive(self._values, params)
+    def __sql__(self, context: QueryContext):
+        return self._json_build_recursive(self._values, context)
 
 
 class List(Item):
@@ -48,6 +48,6 @@ class List(Item):
 
         self.is_aggregate = True
 
-    def __sql__(self, params: list[Any]) -> str:
-        inner_json = super().__sql__(params)
+    def __sql__(self, context: QueryContext):
+        inner_json = super().__sql__(context)
         return f"COALESCE(JSONB_AGG({inner_json}), '[]'::jsonb)"

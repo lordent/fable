@@ -1,4 +1,3 @@
-from itertools import zip_longest
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Any
 
@@ -6,44 +5,17 @@ from sql.core.base import (
     Node,
     OrderBy,
     OrderDirections,
+    QueryContext,
     WrappedNodeMixin,
     register_converter,
 )
 from sql.core.types import SqlType, Types
+from sql.core.window import Window
 from sql.fields.factory import FieldFactory
+from sql.utils import extract_template
 
 if TYPE_CHECKING:
     from sql.fields.base import Field
-
-
-class Window(Node):
-    def __init__(
-        self,
-        partition_by: list[Expression] | tuple[Expression] | Expression | None = None,
-        order_by: list[OrderBy | Expression]
-        | tuple[OrderBy | Expression]
-        | OrderBy
-        | None = None,
-    ):
-        super().__init__()
-
-        self._partition_by: list[Expression] = self._list_arg(partition_by)
-        self._order_by: list[Expression] = self._list_arg(order_by)
-
-    def __sql__(self, params: list[Any]) -> str:
-        parts = []
-        if self._partition_by:
-            p_sql = ", ".join(self._value(p, params) for p in self._partition_by)
-            parts.append(f"PARTITION BY {p_sql}")
-
-        if self._order_by:
-            o_sql = ", ".join(
-                o.__sql__(params) if isinstance(o, OrderBy) else o.asc().__sql__(params)
-                for o in self._order_by
-            )
-            parts.append(f"ORDER BY {o_sql}")
-
-        return " ".join(parts)
 
 
 class Expression(Node):
@@ -69,6 +41,8 @@ class Expression(Node):
         if isinstance(value, Expression):
             self.is_aggregate |= value.is_aggregate
             self.is_windowed |= value.is_windowed
+            if self.sql_type is None:
+                self.sql_type = value.sql_type
 
         return value
 
@@ -145,10 +119,33 @@ class Expression(Node):
     def at_timezone(self, zone: str | Expression):
         return AtTimeZone(self, zone)
 
+    # --- Массивы и JSON ---
+
+    def contains(self, other: Any) -> Q:
+        return Q(
+            self,
+            "@>",
+            [other] if not isinstance(other, (list, tuple, set)) else other,
+            sql_type=Types.BOOLEAN,
+        )
+
+    def overlap(self, other: Any) -> Q:
+        return Q(self, "&&", other, sql_type=Types.BOOLEAN)
+
+    def __getitem__(self, key: str | int) -> Q:
+        return Q(self, "->", str(key), sql_type=Types.JSONB)
+
+    def text(self, key: str | int) -> Q:
+        return Q(self, "->>", str(key), sql_type=Types.TEXT)
+
     # --- Разное ---
 
     def dist(self, other: Any) -> Q:
         return Q(self, "<->", other, sql_type=Types.DOUBLE_PRECISION)
+
+
+NEGATION_OPS = {"!=", "NOT IN", "<>"}
+ARRAY_OPS = {"=", "IN"} | NEGATION_OPS
 
 
 class Q(Expression):
@@ -159,41 +156,32 @@ class Q(Expression):
         self.op = op
         self.right = self._arg(right)
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         left, op, right = self.left, self.op, self.right
 
-        if isinstance(right, (list, tuple, set)):
+        if isinstance(right, (list, tuple, set)) and op in ARRAY_OPS:
             if not right:
                 return "(1=0)"
 
-            l_sql = self._value(left, params)
-
-            base_type = Types.TEXT
+            l_sql = self._value(left, context)
+            raw_type = Types.TEXT
             if isinstance(left, Expression):
-                base_type = left.sql_type or base_type
+                raw_type = str(left.sql_type or raw_type).replace("[]", "")
 
-            params.append(list(right))
-            placeholder = f"${len(params)}"
+            placeholder = context.add_param(list(right))
 
-            op = "!= ALL" if op in ("!=", "NOT IN", "<>") else "= ANY"
-            return f"({l_sql} {op}({placeholder}::{base_type}[]))"
+            new_op = "!= ALL" if op in NEGATION_OPS else "= ANY"
 
-        l_sql = self._value(left, params)
+            return f"({l_sql} {new_op}({placeholder}::{raw_type}[]))"
+
+        l_sql = self._value(left, context)
 
         if isinstance(right, Node) and right.isolated:
-            r_sql = f"({right.__sql__(params)})"
+            r_sql = f"({right.__sql__(context)})"
         else:
-            r_sql = self._value(right, params)
+            r_sql = self._value(right, context)
 
-        return f"({l_sql} {self.op} {r_sql})"
-
-
-def _extract_template(value: Template):
-    for s, interp in zip_longest(value.strings, value.interpolations):
-        if s:
-            yield s
-        if interp:
-            yield interp.value
+        return f"({l_sql} {op} {r_sql})"
 
 
 @register_converter(Template)
@@ -202,24 +190,24 @@ class Concat(Expression):
         super().__init__(sql_type=Types.TEXT)
 
         if isinstance(value, Template):
-            self.args = [self._arg(a) for a in _extract_template(value)]
+            self.args = [self._arg(a) for a in extract_template(value)]
         else:
             self.args = [self._arg(a) for a in (value, *args)]
 
-    def __sql__(self, params: list[Any]) -> str:
-        return f"({' || '.join(self._value(a, params) for a in self.args)})"
+    def __sql__(self, context: QueryContext) -> str:
+        return f"({' || '.join(self._value(a, context) for a in self.args)})"
 
 
 class Raw(Expression):
     def __init__(self, value: Template):
         super().__init__(sql_type=Types.TEXT)
 
-        self.args = [self._arg(a) for a in _extract_template(value)]
+        self.args = [self._arg(a) for a in extract_template(value)]
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         return f"({
             ''.join(
-                self._value(a, params) if isinstance(a, Expression) else a
+                self._value(a, context) if isinstance(a, Node) else str(a)
                 for a in self.args
             )
         })"
@@ -232,13 +220,15 @@ class Cast(WrappedNodeMixin, Expression):
         if isinstance(to, FieldFactory):
             to = to.factory()
 
+        if isinstance(to, Expression):
+            self.sql_type = to.sql_type
+        else:
+            self.sql_type = to
+
         self.to = to
 
-    def __sql__(self, params: list) -> str:
-        to = self.to
-        if isinstance(to, Expression):
-            to = to.sql_type
-        return f"({super().__sql__(params)})::{to}"
+    def __sql__(self, context: QueryContext):
+        return f"({super().__sql__(context)})::{self.sql_type}"
 
 
 class AtTimeZone(WrappedNodeMixin, Expression):
@@ -247,9 +237,10 @@ class AtTimeZone(WrappedNodeMixin, Expression):
 
         self.zone = self._arg(zone)
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         return (
-            f"({super().__sql__(params)} AT TIME ZONE {self._value(self.zone, params)})"
+            f"({super().__sql__(context)} "
+            f"AT TIME ZONE {self._value(self.zone, context)})"
         )
 
 
@@ -266,13 +257,14 @@ class Func(Expression):
     def over(self, partition_by=None, order_by=None):
         self.window = self._arg(Window(partition_by, order_by))
         self.is_windowed = True
+        self.is_aggregate = False
         return self
 
-    def _render_args(self, params: list[Any]) -> str:
-        return ", ".join(self._value(arg, params) for arg in self.args)
+    def _render_args(self, context: QueryContext) -> str:
+        return ", ".join(self._value(arg, context) for arg in self.args)
 
-    def __sql__(self, params: list[Any]) -> str:
-        sql = f"{self.name}({self._render_args(params)})"
+    def __sql__(self, context: QueryContext) -> str:
+        sql = f"{self.name}({self._render_args(context)})"
         if self.window:
-            sql = f"{sql} OVER ({self.window.__sql__(params)})"
+            sql = f"{sql} OVER ({self.window.__sql__(context)})"
         return sql

@@ -1,5 +1,6 @@
 from typing import Any
 
+from sql.core.base import QueryContext
 from sql.core.expressions import Expression, Func
 from sql.core.types import SqlType, Types
 
@@ -20,11 +21,11 @@ class Aggregate(Func):
     def _get_name(self):
         return self.__class__.__name__
 
-    def _render_args(self, params: list[Any]) -> str:
+    def _render_args(self, context: QueryContext) -> str:
         prefix = "DISTINCT " if self.distinct else ""
         arg = self.args[0]
         if isinstance(arg, Expression):
-            arg_sql = self._value(arg, params)
+            arg_sql = self._value(arg, context)
         else:
             arg_sql = arg
         return f"{prefix}{arg_sql}"

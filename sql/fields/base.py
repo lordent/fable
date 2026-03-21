@@ -1,8 +1,9 @@
 from collections.abc import Callable
 from enum import StrEnum
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, Self, TypeVar, cast
 
+from sql.core.base import QueryContext
 from sql.core.expressions import Concat, Expression, Q
 from sql.core.types import SqlType, Types
 from sql.fields.factory import FieldFactory
@@ -36,8 +37,8 @@ class Field(Expression, metaclass=FieldMeta):
 
     def bind(self, owner: type[Model], name: str) -> Self: ...
 
-    def __sql__(self, params: list[Any]) -> str:
-        return f'"{self.model._alias}"."{self.name}"'
+    def __sql__(self, context: QueryContext) -> str:
+        return f'"{context.get_alias(self.model)}"."{self.name}"'
 
     def __hash__(self):
         return hash((self.model, self.name))
@@ -94,5 +95,5 @@ class ComputedField(Field):
             self.expression = self._arg(expression)
         return self
 
-    def __sql__(self, params: list[Any]) -> str:
-        return self.expression.__sql__(params)
+    def __sql__(self, context: QueryContext) -> str:
+        return self.expression.__sql__(context)

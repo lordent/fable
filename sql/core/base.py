@@ -29,6 +29,27 @@ def _get_converter(value_type: type) -> type[Node] | None:
             return converter
 
 
+class QueryContext:
+    def __init__(self, params: list = None, level: int = 0):
+        self.params = params if params is not None else []
+        self.level = level
+
+    def get_alias(self, model: type[Model]) -> str:
+        base_alias = model._alias
+        if self.level > 0:
+            final_alias = f"{base_alias}_s{self.level}"
+        else:
+            final_alias = base_alias
+        return final_alias
+
+    def add_param(self, value: Any) -> str:
+        self.params.append(value)
+        return f"${len(self.params)}"
+
+    def sub(self):
+        return self.__class__(params=self.params, level=self.level + 1)
+
+
 class Node:
     relations: set[Model]
     isolated: bool = False
@@ -48,30 +69,29 @@ class Node:
     def _list_arg(self, value: Any):
         if value is None:
             return []
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, (list, tuple, set)):
             return [self._arg(a) for a in value]
         return [self._arg(value)]
 
-    def _value(self, value: Any, params: list[Any]) -> str:
+    def _value(self, value: Any, context: QueryContext) -> str:
         if isinstance(value, Node):
-            return value.__sql__(params)
+            return value.__sql__(context)
 
         if value is None:
             return "NULL"
 
-        params.append(value)
-        return f"${len(params)}"
+        return context.add_param(value)
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         raise NotImplementedError()
 
     def prepare(self):
-        params = []
-        yield self.__sql__(params)
-        yield from params
+        context = QueryContext()
+        yield self.__sql__(context)
+        yield from context.params
 
     def __str__(self):
-        return self.__sql__([])
+        return self.__sql__(QueryContext())
 
 
 class WrappedNodeMixin(typewith(Node)):
@@ -80,8 +100,8 @@ class WrappedNodeMixin(typewith(Node)):
 
         self.wrapped: Node = self._arg(wrapped)
 
-    def __sql__(self, params: list[Any]):
-        return f"{self.wrapped.__sql__(params)}"
+    def __sql__(self, context: QueryContext):
+        return f"{self.wrapped.__sql__(context)}"
 
 
 class OrderDirections(StrEnum):
@@ -95,5 +115,5 @@ class OrderBy(WrappedNodeMixin, Node):
 
         self.direction = direction
 
-    def __sql__(self, params: list[Any]):
-        return f"{super().__sql__(params)} {self.direction.value}"
+    def __sql__(self, context: QueryContext):
+        return f"{super().__sql__(context)} {self.direction.value}"
