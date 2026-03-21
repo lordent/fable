@@ -8,7 +8,7 @@ from sql.queries.base import QueryBuilder
 from ..core import Q
 
 if TYPE_CHECKING:
-    from ..model import Model
+    from ..models import Model
 
 
 class Delete(QueryBuilder):

@@ -1,70 +1,13 @@
-from collections.abc import Callable
-from enum import StrEnum
-from string.templatelib import Template
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from sql.core import Concat, E, FieldFactory, Func, Q
-from sql.enums import SqlType, Types
-from sql.func import Extract
+from sql.core.expressions import Q
+from sql.core.functions import Age, Extract
+from sql.core.types import Types
+from sql.fields.base import Field
+from sql.fields.factory import FieldFactory
 
 if TYPE_CHECKING:
-    from .model import Model
-
-F = TypeVar("F", bound="Field")
-
-
-class ReferentialAction(StrEnum):
-    CASCADE = "CASCADE"
-    RESTRICT = "RESTRICT"
-    SET_NULL = "SET NULL"
-    SET_DEFAULT = "SET DEFAULT"
-    NO_ACTION = "NO ACTION"
-
-
-class FieldMeta(type):
-    def __call__(cls: type[F], *args, **kwargs) -> F:
-        return cast(F, FieldFactory(cls, args, kwargs))
-
-
-class Field(E, metaclass=FieldMeta):
-    sql_type: SqlType = Types.TEXT
-
-    def __set_name__(self, owner: type[Model], name: str):
-        self.model, self.name = owner, name
-        self.relations.add(self.model)
-        owner._fields[name] = self
-
-    def bind(self, owner: type[Model], name: str) -> Self: ...
-
-    def __sql__(self, params: list[Any]) -> str:
-        return f'"{self.model._alias}"."{self.name}"'
-
-    def __hash__(self):
-        return hash((self.model, self.name))
-
-
-class ForeignField[M: type["Model"]](Field):
-    to: type[Model]
-    sql_type = Types.BIGINT
-
-    def __init__(
-        self,
-        to: M | Literal["Self"],
-        on_delete: ReferentialAction = ReferentialAction.CASCADE,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-
-        self.to = to
-        self.on_delete = on_delete
-
-    def __set_name__(self, owner: type[Model], name: str):
-        super().__set_name__(owner, name)
-
-        if self.to == "Self":
-            self.to = self.model
-
-        owner._foreign_fields[name] = self
+    pass
 
 
 class ArrayField[F: "Field"](Field):
@@ -72,33 +15,6 @@ class ArrayField[F: "Field"](Field):
         super().__init__(**kwargs)
         self.base_field: F = cast(FieldFactory, base_field).factory()
         self.sql_type = self.base_field.sql_type[:]
-
-
-class ComputedField(Field):
-    expression: E
-
-    def __init__(self, expression: Callable[[], Q | Template] | Q | Template, **kwargs):
-        super().__init__(**kwargs)
-
-        self.expression = None
-        self._expression = expression
-
-    def __get__(self, instance, owner: type[Model]):
-        if not self.expression:
-            expression = self._expression
-            expression = expression() if callable(expression) else expression
-
-            if isinstance(expression, Template):
-                expression = Concat(expression)
-
-            self.is_aggregate = expression.is_aggregate
-            self.relations |= expression.relations
-            self.sql_type = expression.sql_type or self.sql_type
-            self.expression = expression
-        return self
-
-    def __sql__(self, params: list[Any]) -> str:
-        return self.expression.__sql__(params)
 
 
 # --- Числа ---
@@ -183,15 +99,15 @@ class DateField(Field):
 
     @property
     def age(self):
-        return Extract(Func("YEAR FROM AGE", self))
+        return Extract(Age(self), part=Extract.YEAR)
 
     @property
     def year(self):
-        return Extract(Func("YEAR FROM", self))
+        return Extract(self, part=Extract.YEAR)
 
     @property
     def month(self):
-        return Extract(Func("MONTH FROM", self))
+        return Extract(self, part=Extract.MONTH)
 
 
 class TimeField(Field):

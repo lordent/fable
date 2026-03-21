@@ -8,7 +8,7 @@ from ..core import E, Q
 from ..fields import Field
 
 if TYPE_CHECKING:
-    from ..model import Model
+    from ..models import Model
 
 
 class Update(QueryBuilder):

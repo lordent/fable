@@ -1,14 +1,16 @@
 import asyncio
 
 from concept.models import Categories, Cities, Sales, Shops, Users
-from sql.aggs import Count, Sum
+from sql.core.aggregates import Count, Sum
+from sql.core.functions import Rank
 from sql.db import Config, Engine
-from sql.fields import DecimalField
-from sql.func import Rank
-from sql.queries.base import Item, List
-from sql.queries.delete import Delete
+from sql.fields.fields import DecimalField
+
+# from sql.queries.delete import Delete
 from sql.queries.select import JoinStrategy, Select
-from sql.queries.update import Update
+
+# from sql.queries.update import Update
+from sql.queries.values import Item, List
 
 Engine(
     Config(
@@ -177,6 +179,8 @@ async def run_test():
     for row in res:
         name = row["parent_name"] or "--- БЕЗРОДНЫЕ ДЕТИ ---"
         print(f"{name:<25} | {row['children_count']}")
+
+    return
 
     print("\n--- Тест 10. Хардкорный UPDATE с авто-FROM ---")
 

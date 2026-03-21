@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from sql.fields import (
+from sql.core.functions import Now
+from sql.fields.base import ForeignField
+from sql.fields.fields import (
     ArrayField,
     DateField,
     DecimalField,
-    ForeignField,
     JsonbField,
-    ReferentialAction,
     SerialField,
     TextField,
     TimeField,
     TimestampField,
     TimeZoneField,
 )
-from sql.func import Now
-from sql.model import Model
+from sql.models import Model
 
 
 class Cities(Model):
@@ -25,13 +24,13 @@ class Cities(Model):
 
 class Categories(Model):
     id = SerialField()
-    parent_id = ForeignField("Self", on_delete=ReferentialAction.CASCADE)
+    parent_id = ForeignField("Self", on_delete=ForeignField.CASCADE)
     name = TextField()
 
 
 class Shops(Model):
     id = SerialField()
-    city_id = ForeignField(Cities, on_delete=ReferentialAction.CASCADE)
+    city_id = ForeignField(Cities, on_delete=ForeignField.CASCADE)
     name = TextField()
     open_at = TimeField()
     close_at = TimeField()
@@ -65,8 +64,8 @@ class Users(Model):
 
 class Sales(Model):
     id = SerialField()
-    shop_id = ForeignField(Shops, on_delete=ReferentialAction.CASCADE)
-    category_id = ForeignField(Categories, on_delete=ReferentialAction.CASCADE)
+    shop_id = ForeignField(Shops, on_delete=ForeignField.CASCADE)
+    category_id = ForeignField(Categories, on_delete=ForeignField.CASCADE)
     amount = DecimalField(precision=12, scale=2)
     created_at = TimestampField()
 

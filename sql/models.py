@@ -4,11 +4,12 @@ from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from sql.app import Application, get_app_for_module
 from sql.db import ConnectionManager, TransactionContext
-
-from .fields import BigSerialField, Field, ForeignField
+from sql.fields.base import Field, ForeignField
+from sql.fields.factory import FieldFactory
+from sql.fields.fields import BigSerialField
 
 if TYPE_CHECKING:
-    from .queries.base import QueryBuilder
+    from sql.queries.base import ValuesQuery
 
 M = TypeVar("M", bound="Model")
 
@@ -17,9 +18,9 @@ class ModelMeta(type):
     def __new__(mcs, name: str, bases: tuple[type[Model], ...], attrs: dict[str, Any]):
         attrs.setdefault("_table", name.lower())
         attrs.setdefault("_alias", name)
-        attrs.setdefault("_fields", {})
-        attrs.setdefault("_foreign_fields", {})
         attrs.setdefault("_app", None)
+        attrs["_fields"] = {}
+        attrs["_foreign_fields"] = {}
 
         cls: type[Model] = super().__new__(mcs, name, bases, attrs)
 
@@ -57,7 +58,7 @@ class Model(metaclass=ModelMeta):
     _virtual = False
     _table: str
     _alias: str | None = None
-    _fields: dict[str, Field] = {}
+    _fields: dict[str, FieldFactory] = {}
     _foreign_fields: dict[str, ForeignField[Model]] = {}
 
     id = BigSerialField()
@@ -92,10 +93,10 @@ class Model(metaclass=ModelMeta):
 
 class QueryModel(Model):
     _virtual = True
-    _query: QueryBuilder
+    _query: ValuesQuery
 
     @classmethod
-    def factory(cls, query: QueryBuilder):
+    def factory(cls, query: ValuesQuery):
         alias = f"sub{id(query)}"
         initial = {"_alias": alias, "_query": query}
         cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
