@@ -1,0 +1,22 @@
+name: Tests and Coverage
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run tests with coverage
+        run: |
+          docker compose run --rm web pytest --cov=sql --cov-report=term-missing > coverage_report.txt
+          echo "### 📊 Отчет по покрытию тестами" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat coverage_report.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Check coverage threshold
+        run: |
+          docker compose run --rm web pytest --cov=sql --cov-fail-under=80
