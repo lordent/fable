@@ -1,20 +1,66 @@
 from __future__ import annotations
 
-from sql.fields import (
+import asyncio
+
+import asyncpg
+import pytest
+import pytest_asyncio
+
+from sql.core.expressions import Expression
+from sql.core.functions import Now
+from sql.db import Config, Engine, _sessions_ctx
+from sql.fields.base import ForeignField
+from sql.fields.fields import (
     ArrayField,
     DateField,
     DecimalField,
-    ForeignField,
     JsonbField,
-    ReferentialAction,
     SerialField,
     TextField,
     TimeField,
     TimestampField,
     TimeZoneField,
 )
-from sql.func import Now
-from sql.model import Model
+from sql.models import Model
+
+
+class FakeField(Expression):
+    def __init__(self, name, sql_type=None):
+        super().__init__(sql_type=sql_type)
+        self.name = name
+
+    def __sql__(self, context):
+        return f'"{self.name}"'
+
+
+@pytest.fixture(scope="session", autouse=True)
+async def setup_db():
+    cfg = Config(
+        dsn="postgresql://user:password@db:5432/sql_builder",
+        apps=["test"],
+        debug=True,
+    )
+
+    Engine(cfg)
+
+    with open("./tests/dump.sql") as f:
+        sql = f.read()
+
+    conn = await asyncpg.connect(cfg.dsn)
+    try:
+        await conn.execute(sql)
+        await conn.execute("ANALYZE")
+    finally:
+        await conn.close()
+
+    await asyncio.sleep(0)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def db_cleanup():
+    token = _sessions_ctx.set(None)
+    yield
+    _sessions_ctx.reset(token)
 
 
 class Cities(Model):
@@ -25,13 +71,13 @@ class Cities(Model):
 
 class Categories(Model):
     id = SerialField()
-    parent_id = ForeignField("Self", on_delete=ReferentialAction.CASCADE)
+    parent_id = ForeignField("Self", on_delete=ForeignField.CASCADE)
     name = TextField()
 
 
 class Shops(Model):
     id = SerialField()
-    city_id = ForeignField(Cities, on_delete=ReferentialAction.CASCADE)
+    city_id = ForeignField(Cities, on_delete=ForeignField.CASCADE)
     name = TextField()
     open_at = TimeField()
     close_at = TimeField()
@@ -65,8 +111,8 @@ class Users(Model):
 
 class Sales(Model):
     id = SerialField()
-    shop_id = ForeignField(Shops, on_delete=ReferentialAction.CASCADE)
-    category_id = ForeignField(Categories, on_delete=ReferentialAction.CASCADE)
+    shop_id = ForeignField(Shops, on_delete=ForeignField.CASCADE)
+    category_id = ForeignField(Categories, on_delete=ForeignField.CASCADE)
     amount = DecimalField(precision=12, scale=2)
     created_at = TimestampField()
 

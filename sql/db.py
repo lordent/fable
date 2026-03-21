@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar, Token
 
 import asyncpg
@@ -50,7 +51,14 @@ class Engine:
         config = self._configs.get(app_name)
         if not config:
             raise RuntimeError(f"Конфигурация для приложения '{app_name}' не найдена.")
-        return await asyncpg.connect(config.dsn)
+        conn: asyncpg.Connection = await asyncpg.connect(config.dsn)
+        await conn.set_type_codec(
+            "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+        )
+        await conn.set_type_codec(
+            "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+        )
+        return conn
 
 
 class TransactionContext:

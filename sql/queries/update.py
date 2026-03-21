@@ -8,7 +8,7 @@ from ..core import E, Q
 from ..fields import Field
 
 if TYPE_CHECKING:
-    from ..model import Model
+    from ..models import Model
 
 
 class Update(QueryBuilder):
@@ -44,28 +44,28 @@ class Update(QueryBuilder):
             self.relations |= f.relations
         return self
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         if not self._values:
             raise ValueError("Нечего обновлять. Используйте .set()")
 
         set_parts = []
         for name, value in self._values.items():
-            val_sql = self._value(value, params)
+            val_sql = self._value(value, context)
             set_parts.append(f'"{name}" = {val_sql}')
 
         target_alias = self.model_cls._alias
-        sql = [f"UPDATE {self.model_cls.__sql__(params)}"]
+        sql = [f"UPDATE {self.model_cls.__sql__(context)}"]
         sql.append(f"SET {', '.join(set_parts)}")
 
         from_models = [
             m for m in self.relations if m != self.model_cls and not m._virtual
         ]
         if from_models:
-            from_parts = [m.__sql__(params) for m in from_models]
+            from_parts = [m.__sql__(context) for m in from_models]
             sql.append(f"FROM {', '.join(from_parts)}")
 
         if self._where:
-            sql.append(f"WHERE {self._where.__sql__(params)}")
+            sql.append(f"WHERE {self._where.__sql__(context)}")
 
         prefix = f'"{target_alias}".' if from_models else ""
 

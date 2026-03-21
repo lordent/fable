@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Self, TypedDict, cast
+from typing import Any, Self, TypedDict
 
-from ..core import E, OrderBy, Q
-from ..fields import Field
-from ..model import Model
-from .base import SelectValuesQuery
+from sql.core.expressions import Expression, Q
+from sql.fields.base import Field
+from sql.queries.base import ValuesQuery
+
+from ..core.base import OrderBy, QueryContext
+from ..models import Model
+from .values import Item, List
 
 
 class JoinStrategy(StrEnum):
@@ -36,7 +39,7 @@ class GroupMode(StrEnum):
 
 class SummaryDict(TypedDict):
     mode: GroupMode
-    fields: list[E | Field]
+    fields: list[Expression | Field]
 
 
 class JoinDict(TypedDict):
@@ -44,8 +47,11 @@ class JoinDict(TypedDict):
     strategy: JoinStrategy
 
 
-class Select(SelectValuesQuery):
-    def __init__(self, *args: Field, **kwargs: E | Any):
+class Select(ValuesQuery):
+    Item = Item
+    List = List
+
+    def __init__(self, *args: Field, **kwargs: Any):
         self._joins: dict[type[Model], JoinDict] = {}
         self._where: Q | None = None
         self._having: Q | None = None
@@ -84,19 +90,19 @@ class Select(SelectValuesQuery):
     ) -> Self:
         return self._set_lock(LockMode.SHARE, of, nowait, skip_locked)
 
-    def summary(self, *fields: Field | E, mode: GroupMode = GroupMode.ROLLUP) -> Self:
-        self._summary = {"mode": mode, "fields": list(fields)}
-        for f in fields:
-            if hasattr(f, "relations"):
-                self.relations |= f.relations
+    def summary(
+        self, *args: Field | Expression, mode: GroupMode = GroupMode.ROLLUP
+    ) -> Self:
+        self._summary = {"mode": mode, "fields": self._list_arg(args)}
         return self
 
-    def filter(self, expr: Q) -> Self:
-        if expr.is_aggregate:
-            self._having = (self._having & expr) if self._having else expr
-        else:
-            self._where = (self._where & expr) if self._where else expr
-        self.relations |= expr.relations
+    def filter(self, *args: Q) -> Self:
+        for a in args:
+            a: Q = self._arg(a)
+            if a.is_aggregate:
+                self._having = (self._having & a) if self._having else a
+            else:
+                self._where = (self._where & a) if self._where else a
         return self
 
     def join(
@@ -108,7 +114,7 @@ class Select(SelectValuesQuery):
         if not on:
             for field in target._foreign_fields.values():
                 if (to := field.to) in self.relations and to != target:
-                    on = field == cast(Model, to).id
+                    on = field == to.id
                     break
             if not on:
                 for rel in self.relations:
@@ -126,17 +132,14 @@ class Select(SelectValuesQuery):
         self.relations |= {target} | on.relations
         return self
 
-    def order_by(self, *exprs: E | OrderBy) -> Self:
-        for e in exprs:
-            self._order_by.append(e if isinstance(e, OrderBy) else e.asc())
-            self.relations |= e.relations
+    def order_by(self, *args: Expression | OrderBy) -> Self:
+        self._order_by.extend(
+            self._list_arg([a if isinstance(a, OrderBy) else a.asc() for a in args])
+        )
         return self
 
-    def group_by(self, *fields: Field | E) -> Self:
-        self._group_by_manual.extend(fields)
-        for f in fields:
-            if hasattr(f, "relations"):
-                self.relations |= f.relations
+    def group_by(self, *fields: Field | Expression) -> Self:
+        self._group_by_manual.extend(self._list_arg(fields))
         return self
 
     def limit(self, val: int) -> Self:
@@ -147,45 +150,48 @@ class Select(SelectValuesQuery):
         self._offset = val
         return self
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         has_aggregate = any(
-            getattr(v, "is_aggregate", False) for v in self._values.values()
+            value.is_aggregate
+            for value in self._values.values()
+            if isinstance(value, Expression)
         )
 
         cols, group_by = [], []
 
-        for alias, expr in self._values.items():
-            val_sql = self._value(expr, params)
+        for alias, value in self._values.items():
+            sql_ = self._value(value, context)
 
-            if has_aggregate and isinstance(expr, E):
-                if not expr.is_aggregate and not getattr(expr, "window", None):
-                    group_by.append(val_sql)
+            if has_aggregate and isinstance(value, Expression):
+                if not value.is_aggregate and not value.is_windowed:
+                    group_by.append(sql_)
 
-            cols.append(f'{val_sql} AS "{alias}"')
+            cols.append(f'{sql_} AS "{alias}"')
 
         if has_aggregate and self._order_by:
-            for ob in self._order_by:
-                ob_sql = self._value(ob.wrapped, params)
-                if not getattr(ob.wrapped, "is_aggregate", False):
-                    group_by.append(ob_sql)
+            for a in self._order_by:
+                wrapped = a.wrapped
+
+                if isinstance(wrapped, Expression):
+                    if not wrapped.is_aggregate and not wrapped.is_windowed:
+                        group_by.append(self._value(wrapped, context))
 
         sql = [f"SELECT {', '.join(cols)}"]
 
-        joined_models = set(self._joins.keys())
-        main_models = [m for m in self.relations if m not in joined_models]
-
-        if main_models:
-            sql.append(f"FROM {', '.join(m.__sql__(params) for m in main_models)}")
+        if main_models := sorted(
+            self.relations - self._joins.keys(), key=lambda m: m._virtual, reverse=True
+        ):
+            sql.append(f"FROM {', '.join(m.__sql__(context) for m in main_models)}")
 
         for target, join_data in self._joins.items():
             strategy = join_data["strategy"].value
-            on_sql = join_data["on"].__sql__(params)
-            sql.append(f"{strategy} {target.__sql__(params)} ON {on_sql}")
+            on_sql = join_data["on"].__sql__(context)
+            sql.append(f"{strategy} {target.__sql__(context)} ON {on_sql}")
 
         if self._where:
-            sql.append(f"WHERE {self._where.__sql__(params)}")
+            sql.append(f"WHERE {self._where.__sql__(context)}")
 
-        manual_group_sql = [self._value(f, params) for f in self._group_by_manual]
+        manual_group_sql = [self._value(f, context) for f in self._group_by_manual]
 
         final_group_list = group_by + manual_group_sql
 
@@ -194,7 +200,7 @@ class Select(SelectValuesQuery):
 
             if self._summary:
                 summary = self._summary
-                summary_sql_list = [self._value(f, params) for f in summary["fields"]]
+                summary_sql_list = [self._value(f, context) for f in summary["fields"]]
 
                 regular_group = [
                     f for f in group_fields_unique if f not in summary_sql_list
@@ -212,11 +218,11 @@ class Select(SelectValuesQuery):
                 sql.append(f"GROUP BY {', '.join(group_fields_unique)}")
 
         if self._having:
-            sql.append(f"HAVING {self._having.__sql__(params)}")
+            sql.append(f"HAVING {self._having.__sql__(context)}")
 
         if self._order_by:
             sql.append(
-                f"ORDER BY {', '.join(e.__sql__(params) for e in self._order_by)}"
+                f"ORDER BY {', '.join(e.__sql__(context) for e in self._order_by)}"
             )
 
         if self._limit is not None:
@@ -228,7 +234,9 @@ class Select(SelectValuesQuery):
             lock = self._lock
             parts = [lock["mode"]]
             if lock["of"]:
-                parts.append(f"OF {', '.join(f'"{m._alias}"' for m in lock['of'])}")
+                parts.append(
+                    f"OF {', '.join(f'"{context.get_alias(m)}"' for m in lock['of'])}"
+                )
             if lock["nowait"]:
                 parts.append("NOWAIT")
             elif lock["skip_locked"]:

@@ -3,12 +3,13 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from sql.app import Application, get_app_for_module
+from sql.core.base import QueryContext
 from sql.db import ConnectionManager, TransactionContext
-
-from .fields import BigSerialField, Field, ForeignField
+from sql.fields.base import Field, ForeignField
+from sql.fields.fields import BigSerialField
 
 if TYPE_CHECKING:
-    from .queries.base import QueryBuilder
+    from sql.queries.base import ValuesQuery
 
 M = TypeVar("M", bound="Model")
 
@@ -17,9 +18,9 @@ class ModelMeta(type):
     def __new__(mcs, name: str, bases: tuple[type[Model], ...], attrs: dict[str, Any]):
         attrs.setdefault("_table", name.lower())
         attrs.setdefault("_alias", name)
-        attrs.setdefault("_fields", {})
-        attrs.setdefault("_foreign_fields", {})
         attrs.setdefault("_app", None)
+        attrs["_fields"] = {}
+        attrs["_foreign_fields"] = {}
 
         cls: type[Model] = super().__new__(mcs, name, bases, attrs)
 
@@ -68,18 +69,14 @@ class Model(metaclass=ModelMeta):
         return type(
             f"{cls.__name__}_{alias}",
             (cls,),
-            {"_alias": alias, "_table": cls._table, "_virtual": True},
+            {"_alias": f"{cls._alias}_{alias}", "_table": cls._table, "_virtual": True},
         )
 
     @classmethod
-    def __sql__(cls: type[Self], params: list[Any]) -> str:
+    def __sql__(cls: type[Self], context: QueryContext) -> str:
         if issubclass(cls, QueryModel):
-            return f'({cls._query.__sql__(params)}) AS "{cls._alias}"'
-        return (
-            f'"{cls._table}" AS "{cls._alias}"'
-            if cls._alias != cls._table
-            else f'"{cls._table}"'
-        )
+            return f'({cls._query.__sql__(context.sub())}) AS "{cls._alias}"'
+        return f'"{cls._table}" AS "{context.get_alias(cls)}"'
 
     @classmethod
     def atomic(cls, checkpoint: bool = True):
@@ -92,10 +89,10 @@ class Model(metaclass=ModelMeta):
 
 class QueryModel(Model):
     _virtual = True
-    _query: QueryBuilder
+    _query: ValuesQuery
 
     @classmethod
-    def factory(cls, query: QueryBuilder):
+    def factory(cls, query: ValuesQuery):
         alias = f"sub{id(query)}"
         initial = {"_alias": alias, "_query": query}
         cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
@@ -103,5 +100,5 @@ class QueryModel(Model):
             if isinstance(value, Field):
                 value.bind(cls, name)
             else:
-                Field().bind(cls, name)
+                Field().factory().bind(cls, name)
         return cls

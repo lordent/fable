@@ -1,4 +1,4 @@
-from sql.enums import Types
+from sql.core.types import Types
 
 
 def test_basic_types():

@@ -8,7 +8,7 @@ from sql.queries.base import QueryBuilder
 from ..core import Q
 
 if TYPE_CHECKING:
-    from ..model import Model
+    from ..models import Model
 
 
 class Delete(QueryBuilder):
@@ -28,20 +28,20 @@ class Delete(QueryBuilder):
         self._returning.extend(fields)
         return self
 
-    def __sql__(self, params: list[Any]) -> str:
+    def __sql__(self, context: QueryContext) -> str:
         target_alias = self.model_cls._alias
-        sql = [f"DELETE FROM {self.model_cls.__sql__(params)}"]
+        sql = [f"DELETE FROM {self.model_cls.__sql__(context)}"]
 
         using_models = [
             m for m in self.relations if m != self.model_cls and not m._virtual
         ]
 
         if using_models:
-            using_parts = [m.__sql__(params) for m in using_models]
+            using_parts = [m.__sql__(context) for m in using_models]
             sql.append(f"USING {', '.join(using_parts)}")
 
         if self._where:
-            sql.append(f"WHERE {self._where.__sql__(params)}")
+            sql.append(f"WHERE {self._where.__sql__(context)}")
 
         if self._returning:
             prefix = f'"{target_alias}".' if using_models else ""

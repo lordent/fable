@@ -2,26 +2,23 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Self, TypeVar
+from typing import TypeVar
 
 import asyncpg
 
 from sql.app import Application
+from sql.queries.values import ValuesNodeMixin
 
-from ..core import E, Query
+from ..core.base import Node
 from ..db import Engine, get_session
-from ..fields import Field
-from ..model import Model, QueryModel
+from ..models import Model, QueryModel
 
 logger = logging.getLogger("sql_builder.analyzer")
 
 T = TypeVar("T", bound="Model")
 
 
-class QueryBuilder(Query):
-    def as_model(self, base_model: type[QueryModel] = QueryModel):
-        return base_model.factory(self)
-
+class Query(Node):
     async def _get_connection(self, app_name: str) -> tuple[asyncpg.Connection, bool]:
         conn = get_session(app_name)
         if conn:
@@ -58,15 +55,16 @@ class QueryBuilder(Query):
                 await conn.close()
 
     async def _explain_and_analyze(
-        self, conn: asyncpg.Connection, sql: str, params: list[Any]
+        self, conn: asyncpg.Connection, sql: str, params: list
     ):
         is_in_transaction = conn.is_in_transaction()
+        transaction_id = f"advisor_{id(self)}"
 
         try:
             if not is_in_transaction:
                 await conn.execute("BEGIN")
             else:
-                await conn.execute(f"SAVEPOINT advisor_{id(self)}")
+                await conn.execute(f"SAVEPOINT {transaction_id}")
 
             explain_query = f"EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {sql}"
             raw_plan = await conn.fetchval(explain_query, *params)
@@ -80,7 +78,7 @@ class QueryBuilder(Query):
             if not is_in_transaction:
                 await conn.execute("ROLLBACK")
             else:
-                await conn.execute(f"ROLLBACK TO SAVEPOINT advisor_{id(self)}")
+                await conn.execute(f"ROLLBACK TO SAVEPOINT {transaction_id}")
 
     def _analyze_plan(self, sql: str, plan_data: dict):
         issues = []
@@ -130,45 +128,6 @@ class QueryBuilder(Query):
             print("═" * 60 + "\n")
 
 
-class SelectValuesQuery(QueryBuilder):
-    def __init__(self, *args: Field, **kwargs: dict[str, Any]):
-        super().__init__()
-        if args or kwargs:
-            self.values(*args, **kwargs)
-
-    def values(self, *args: Field, **kwargs: Any) -> Self:
-        for f in args:
-            if not isinstance(f, Field):
-                raise ValueError(
-                    f"Аргумент {f} должен быть Field. Для выражений используйте kwargs."
-                )
-            self._values[f.name] = f
-            self.relations |= f.relations
-
-        for alias, v in kwargs.items():
-            self._values[alias] = v
-            if isinstance(v, E):
-                self.relations |= v.relations
-        return self
-
-
-class Item(SelectValuesQuery):
-    def _json_build_recursive(self, fields: dict, params: list[Any]) -> str:
-        tokens = []
-        for name, value in fields.items():
-            tokens.append(f"'{name}'")
-            tokens.append(self._value(value, params))
-        return f"JSONB_BUILD_OBJECT({', '.join(tokens)})"
-
-    def __sql__(self, params: list[Any]):
-        return self._json_build_recursive(self._values, params)
-
-
-class List(Item):
-    def __init__(self, *args: Field, **kwargs: dict[str, Any]):
-        super().__init__(*args, **kwargs)
-        self.is_aggregate = True
-
-    def __sql__(self, params: list[Any]) -> str:
-        inner_json = super().__sql__(params)
-        return f"COALESCE(JSONB_AGG({inner_json}), '[]'::jsonb)"
+class ValuesQuery(ValuesNodeMixin, Query):
+    def as_model(self, base_model: type[QueryModel] = QueryModel):
+        return base_model.factory(self)

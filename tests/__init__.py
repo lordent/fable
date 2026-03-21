@@ -1,8 +1,8 @@
 from sql.app import Application
 
 
-class ConceptApplication(Application):
-    name = "concept"
+class TestApplication(Application):
+    name = "test"
 
     def on_ready(self):
         pass
