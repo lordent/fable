@@ -1,8 +1,9 @@
 from enum import StrEnum
 from typing import Any
 
+from sql.core.base import QueryContext
 from sql.core.expressions import Expression, Func, Raw
-from sql.core.types import SqlType, Types
+from sql.core.types import Types
 
 
 def Rank():
@@ -64,7 +65,3 @@ class Extract(Expression):
 
     def __sql__(self, context: QueryContext) -> str:
         return Raw(t"EXTRACT({self.part.value} FROM {self.source})").__sql__(context)
-
-
-def Coalesce(*args: Any, sql_type: SqlType | None = None):
-    return Func("COALESCE", *args, sql_type=sql_type)

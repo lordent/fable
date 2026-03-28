@@ -1,10 +1,9 @@
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from sql.core.expressions import Q
 from sql.core.functions import Age, Extract
 from sql.core.types import Types
 from sql.fields.base import Field
-from sql.fields.factory import FieldFactory
 
 if TYPE_CHECKING:
     pass
@@ -13,7 +12,8 @@ if TYPE_CHECKING:
 class ArrayField[F: "Field"](Field):
     def __init__(self, base_field: F, **kwargs):
         super().__init__(**kwargs)
-        self.base_field: F = cast(FieldFactory, base_field).factory()
+
+        self.base_field = base_field
         self.sql_type = self.base_field.sql_type[:]
 
 
@@ -74,7 +74,7 @@ class TextField(Field):
         self.similarity_threshold = similarity_threshold
 
     def similar(self, other: Any, threshold: float | None = None) -> Q:
-        return (self % other) < (threshold or self.similarity_threshold)
+        return self.dist(other) < (threshold or self.similarity_threshold)
 
 
 class CharField(Field):

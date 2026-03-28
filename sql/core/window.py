@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from sql.core.base import (
     Node,
     OrderBy,
+    QueryContext,
 )
 
 if TYPE_CHECKING:

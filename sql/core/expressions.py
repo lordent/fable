@@ -1,5 +1,8 @@
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sql.core.base import (
     Node,
@@ -11,8 +14,7 @@ from sql.core.base import (
 )
 from sql.core.types import SqlType, Types
 from sql.core.window import Window
-from sql.fields.factory import FieldFactory
-from sql.utils import extract_template
+from sql.utils import extract_template, quote_ident
 
 if TYPE_CHECKING:
     from sql.fields.base import Field
@@ -140,6 +142,9 @@ class Expression(Node):
 
     # --- Разное ---
 
+    def default(self, other: Any):
+        return Coalesce(self, other)
+
     def dist(self, other: Any) -> Q:
         return Q(self, "<->", other, sql_type=Types.DOUBLE_PRECISION)
 
@@ -176,6 +181,9 @@ class Q(Expression):
 
         l_sql = self._value(left, context)
 
+        if op in ("IS NULL", "IS NOT NULL"):
+            return f"({l_sql} {op})"
+
         if isinstance(right, Node) and right.isolated:
             r_sql = f"({right.__sql__(context)})"
         else:
@@ -186,7 +194,7 @@ class Q(Expression):
 
 @register_converter(Template)
 class Concat(Expression):
-    def __init__(self, value: Template | Any, *args: Any):
+    def __init__(self, value: Any, *args: Any):
         super().__init__(sql_type=Types.TEXT)
 
         if isinstance(value, Template):
@@ -199,10 +207,30 @@ class Concat(Expression):
 
 
 class Raw(Expression):
-    def __init__(self, value: Template):
-        super().__init__(sql_type=Types.TEXT)
+    def __init__(self, value: Any):
+        super().__init__()
 
-        self.args = [self._arg(a) for a in extract_template(value)]
+        if isinstance(value, Template):
+            self.args = [self._arg(a) for a in extract_template(value)]
+        else:
+            self.args = [self.from_python(value)]
+
+    def from_python(self, value: Any):
+        if isinstance(value, int):
+            self.sql_type = Types.BIGINT
+        elif isinstance(value, (float, Decimal)):
+            self.sql_type = Types.NUMERIC
+        elif isinstance(value, (datetime, date)):
+            self.sql_type = Types.TIMESTAMPTZ
+        elif isinstance(value, timedelta):
+            self.sql_type = Types.INTERVAL
+        elif isinstance(value, UUID):
+            self.sql_type = Types.UUID
+        elif isinstance(value, (list, dict)):
+            self.sql_type = Types.JSONB
+        else:
+            raise TypeError(f"Тип {type(value)} не поддерживается в Raw")
+        return value
 
     def __sql__(self, context: QueryContext) -> str:
         return f"({
@@ -213,12 +241,19 @@ class Raw(Expression):
         })"
 
 
-class Cast(WrappedNodeMixin, Expression):
-    def __init__(self, wrapped: Expression, to: str | Expression | FieldFactory):
-        super().__init__(wrapped=wrapped, is_aggregate=wrapped.is_aggregate)
+class Ref(Expression):
+    def __init__(self, reference: str):
+        super().__init__()
 
-        if isinstance(to, FieldFactory):
-            to = to.factory()
+        self.reference = reference
+
+    def __sql__(self, context: QueryContext) -> str:
+        return quote_ident(self.reference)
+
+
+class Cast(WrappedNodeMixin, Expression):
+    def __init__(self, wrapped: Expression, to: str | Expression):
+        super().__init__(wrapped=wrapped, is_aggregate=wrapped.is_aggregate)
 
         if isinstance(to, Expression):
             self.sql_type = to.sql_type
@@ -268,3 +303,7 @@ class Func(Expression):
         if self.window:
             sql = f"{sql} OVER ({self.window.__sql__(context)})"
         return sql
+
+
+def Coalesce(*args: Any, sql_type: SqlType | None = None):
+    return Func("COALESCE", *args, sql_type=sql_type)

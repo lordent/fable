@@ -3,9 +3,10 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Self, TypedDict
 
-from sql.core.expressions import Expression, Q
+from sql.core.expressions import Expression, Q, Ref
 from sql.fields.base import Field
-from sql.queries.base import ValuesQuery
+from sql.queries.base import RecursiveContext, ValuesQuery
+from sql.utils import quote_ident
 
 from ..core.base import OrderBy, QueryContext
 from ..models import Model
@@ -50,6 +51,9 @@ class JoinDict(TypedDict):
 class Select(ValuesQuery):
     Item = Item
     List = List
+    Join = JoinStrategy
+    Summary = GroupMode
+    Lock = LockMode
 
     def __init__(self, *args: Field, **kwargs: Any):
         self._joins: dict[type[Model], JoinDict] = {}
@@ -79,6 +83,9 @@ class Select(ValuesQuery):
         }
         self.relations |= self._lock["of"]
         return self
+
+    def recursive(self):
+        return RecursiveContext(self)
 
     def for_update(
         self, *of: type[Model], nowait: bool = False, skip_locked: bool = False
@@ -161,22 +168,36 @@ class Select(ValuesQuery):
 
         for alias, value in self._values.items():
             sql_ = self._value(value, context)
-
             if has_aggregate and isinstance(value, Expression):
                 if not value.is_aggregate and not value.is_windowed:
                     group_by.append(sql_)
 
-            cols.append(f'{sql_} AS "{alias}"')
+            cols.append(f"{sql_} AS {quote_ident(alias)}")
 
         if has_aggregate and self._order_by:
             for a in self._order_by:
                 wrapped = a.wrapped
 
+                if isinstance(wrapped, Ref):
+                    wrapped = self._values[wrapped.reference]
+
                 if isinstance(wrapped, Expression):
                     if not wrapped.is_aggregate and not wrapped.is_windowed:
                         group_by.append(self._value(wrapped, context))
 
-        sql = [f"SELECT {', '.join(cols)}"]
+        sql = []
+
+        if not context.level and (
+            recursives := [m for m in self.relations if m._recursive]
+        ):
+            cte_context = context.sub()
+            ctes = ", ".join(
+                f"{quote_ident(m._alias)} AS ({m._query.__sql__(cte_context)})"
+                for m in recursives
+            )
+            sql.append(f"WITH RECURSIVE {ctes}")
+
+        sql.append(f"SELECT {', '.join(cols)}")
 
         if main_models := sorted(
             self.relations - self._joins.keys(), key=lambda m: m._virtual, reverse=True
@@ -226,16 +247,18 @@ class Select(ValuesQuery):
             )
 
         if self._limit is not None:
-            sql.append(f"LIMIT {self._limit}")
+            sql.append(f"LIMIT {int(self._limit)}")
         if self._offset is not None:
-            sql.append(f"OFFSET {self._offset}")
+            sql.append(f"OFFSET {int(self._offset)}")
 
         if self._lock:
             lock = self._lock
             parts = [lock["mode"]]
             if lock["of"]:
                 parts.append(
-                    f"OF {', '.join(f'"{context.get_alias(m)}"' for m in lock['of'])}"
+                    f"OF {
+                        ', '.join(quote_ident(context.get_alias(m)) for m in lock['of'])
+                    }"
                 )
             if lock["nowait"]:
                 parts.append("NOWAIT")

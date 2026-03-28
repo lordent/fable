@@ -1,6 +1,6 @@
 from sql.core.aggregates import Count, Sum
 from sql.core.base import QueryContext
-from sql.core.functions import Coalesce, Rank
+from sql.core.functions import Rank
 from sql.fields.base import ForeignField
 from sql.fields.fields import IntField, TextField
 from sql.models import Model
@@ -115,7 +115,7 @@ def test_aggregate_in_complex_expression_group_by():
 
 
 def test_coalesce_with_aggregates_group_by():
-    val = Coalesce(Sum(Order.amount), 0)
+    val = Sum(Order.amount).default(0)
     query = Select(User.name, revenue=val).join(Order)
     sql = query.__sql__(QueryContext())
     assert 'GROUP BY "User"."name"' in sql

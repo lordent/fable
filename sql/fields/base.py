@@ -1,12 +1,13 @@
 from collections.abc import Callable
+from copy import deepcopy
 from enum import StrEnum
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, Self, TypeVar
 
 from sql.core.base import QueryContext
 from sql.core.expressions import Concat, Expression, Q
 from sql.core.types import SqlType, Types
-from sql.fields.factory import FieldFactory
+from sql.utils import quote_ident
 
 if TYPE_CHECKING:
     from ..models import Model
@@ -24,21 +25,36 @@ class ReferentialAction(StrEnum):
 
 class FieldMeta(type):
     def __call__(cls: type[F], *args, **kwargs) -> F:
-        return cast(F, FieldFactory(cls, args, kwargs))
+        blueprint = deepcopy((args, kwargs))
+        instance: Field = type.__call__(cls, *args, **kwargs)
+        instance._blueprint = blueprint
+        return instance
 
 
 class Field(Expression, metaclass=FieldMeta):
+    _blueprint: tuple[tuple, dict]
     sql_type: SqlType = Types.TEXT
+
+    def __init__(self, sql_type=None, primary=False):
+        super().__init__(sql_type)
+
+        self.primary = primary
 
     def __set_name__(self, owner: type[Model], name: str):
         self.model, self.name = owner, name
         self.relations.add(self.model)
         owner._fields[name] = self
 
-    def bind(self, owner: type[Model], name: str) -> Self: ...
+    def bind(self, owner: type[Model] = None, name: str = None) -> Self:
+        args, kwargs = deepcopy(self._blueprint)
+        instance = type(self)(*args, **kwargs)
+        if owner and name:
+            setattr(owner, name, instance)
+            instance.__set_name__(owner, name)
+        return instance
 
     def __sql__(self, context: QueryContext) -> str:
-        return f'"{context.get_alias(self.model)}"."{self.name}"'
+        return f"{quote_ident(context.get_alias(self.model))}.{quote_ident(self.name)}"
 
     def __hash__(self):
         return hash((self.model, self.name))

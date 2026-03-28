@@ -5,6 +5,7 @@ from sql.core.expressions import Expression
 from sql.core.types import Types
 from sql.core.typings import typewith
 from sql.fields.base import Field
+from sql.utils import quote_literal
 
 
 class ValuesNodeMixin(typewith(Node)):
@@ -34,7 +35,8 @@ class Item(ValuesNodeMixin, Expression):
 
     def _json_build_recursive(self, fields: dict, context: QueryContext):
         tokens = [
-            f"'{name}', {self._value(value, context)}" for name, value in fields.items()
+            f"{quote_literal(name)}, {self._value(value, context)}"
+            for name, value in fields.items()
         ]
         return f"JSONB_BUILD_OBJECT({', '.join(tokens)})"
 

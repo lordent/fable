@@ -9,7 +9,7 @@ import asyncpg
 from sql.app import Application
 from sql.queries.values import ValuesNodeMixin
 
-from ..core.base import Node
+from ..core.base import Node, QueryContext
 from ..db import Engine, get_session
 from ..models import Model, QueryModel
 
@@ -131,3 +131,44 @@ class Query(Node):
 class ValuesQuery(ValuesNodeMixin, Query):
     def as_model(self, base_model: type[QueryModel] = QueryModel):
         return base_model.factory(self)
+
+    def __or__(self: ValuesQuery, other: ValuesQuery) -> Union:
+        return Union(self, other, all=False)
+
+    def __and__(self: ValuesQuery, other: ValuesQuery) -> Union:
+        return Union(self, other, all=True)
+
+
+class Union(ValuesQuery):
+    isolated = True
+
+    def __init__(self, *queries: ValuesQuery, all: bool = False):
+        super().__init__()
+
+        self._queries: list[ValuesQuery] = self._list_arg(queries)
+        self._all = all
+
+        if self._queries:
+            self._values = self._queries[0]._values
+
+    def __sql__(self, context: QueryContext) -> str:
+        parts = [f"({q.__sql__(context)})" for q in self._queries]
+        operator = " UNION ALL " if self._all else " UNION "
+        return operator.join(parts)
+
+
+class RecursiveContext:
+    def __init__(self, base_query: ValuesQuery):
+        self.base_query = base_query
+        self.tree_model = QueryModel.factory(base_query)
+        self.tree_model._recursive = True
+
+    def __enter__(self) -> type[QueryModel]:
+        return self.tree_model
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self.tree_model._recursive:
+            raise ValueError(
+                "Вы забыли наполнить рекурсию: ModelName << (base & recur)"
+            )
+        return False

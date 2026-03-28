@@ -1,6 +1,9 @@
+from decimal import Decimal
+
 import pytest
 
 from sql.core.aggregates import Avg, Count, Sum
+from sql.core.expressions import Raw, Ref
 from sql.fields.fields import DecimalField
 from sql.queries.base import Query
 from sql.queries.select import Select
@@ -51,7 +54,6 @@ async def test_analytics_rollup_integration():
 
 @pytest.mark.asyncio
 async def test_frankenstein_integration():
-
     premium_cities_sub = (
         Select(Cities.id)
         .join(Users, on=(Users.id > 0))
@@ -157,6 +159,83 @@ async def test_json_list_empty_coalesce():
     res = await query
     if res:
         assert res[0]["shops"] == []
+
+
+@pytest.mark.asyncio
+async def test_join():
+    query = (
+        Select(
+            Categories.name,
+            sales_count=Count(Categories.id),
+            total_revenue=Sum(Sales.amount).default(0),
+        )
+        .join(Sales, strategy=Select.Join.RIGHT)
+        .order_by(
+            Ref("sales_count").desc(),
+        )
+    )
+    res = [dict(record) for record in await query]
+    assert res == [
+        {"name": "Гаджеты", "sales_count": 3, "total_revenue": Decimal("10000.00")},
+        {"name": "Бижутерия", "sales_count": 1, "total_revenue": Decimal("1500.00")},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_union():
+    search_term = "Гаджет"
+    min_amount_expensive = 4000.00
+    min_amount_cheap = 1000.00
+
+    q1 = (
+        Select(Sales.id, Sales.amount, category_name=Categories.name)
+        .join(Categories)
+        .filter(
+            Categories.name.similar(search_term),
+            Sales.amount >= min_amount_expensive,
+        )
+    )
+
+    q2 = (
+        Select(Sales.id, Sales.amount, category_name=Categories.name)
+        .join(Categories)
+        .filter(
+            Categories.name == "Бижутерия",
+            Sales.amount >= min_amount_cheap,
+        )
+    )
+
+    combined_query = q1 & q2
+
+    final_model = combined_query.as_model()
+    query = Select(final_model.category_name, final_model.amount).order_by(
+        final_model.amount.desc()
+    )
+
+    assert [dict(record) for record in await query] == [
+        {"category_name": "Бижутерия", "amount": Decimal("1500.00")}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recursive():
+    with (
+        Select(Categories.id, Categories.name, level=Raw(0))
+        .filter(Categories.parent_id == None)
+        .recursive() as Tree
+    ):
+        Tree &= Select(Categories.id, Categories.name, level=Tree.level + 1).join(
+            Tree, on=Categories.parent_id == Tree.id
+        )
+
+    query = Select(*Tree).order_by(Tree.id.asc())
+    assert [dict(record) for record in await query] == [
+        {"id": 1, "name": "Электроника", "level": 0},
+        {"id": 2, "name": "Аксессуары", "level": 1},
+        {"id": 3, "name": "Гаджеты", "level": 2},
+        {"id": 4, "name": "Бижутерия", "level": 2},
+        {"id": 5, "name": "Одежда", "level": 0},
+    ]
 
 
 def test_analyze_plan_logic():

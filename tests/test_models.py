@@ -94,25 +94,22 @@ def test_deep_inheritance_and_isolation():
     assert "role" not in User._fields
     assert Admin.name.model == Admin
     assert User.name.model == User
+    assert id(Admin.id) != id(User.id)
+    assert id(Admin.id) != id(Base.id)
+    assert id(Admin.id) == id(Admin.id)
 
 
-def test_computed_field_lazy_circular_reference():
+def test_computed_field():
     field = User._fields["posts_count"]
-    assert callable(field._expression)
-
-    expr = User.posts_count.expression
-
-    assert expr is not None
-    assert isinstance(expr, Count)
-
-    assert Post in field.relations
-    assert User in field.relations
-
-
-def test_computed_field_sql_rendering_with_circular():
     context = QueryContext()
     sql = User.posts_count.__sql__(context)
+    expr = User.posts_count.expression
 
+    assert callable(field._expression)
+    assert expr is not None
+    assert isinstance(expr, Count)
+    assert Post in field.relations
+    assert User in field.relations
     assert 'COUNT("Post"."id")' in sql
 
 

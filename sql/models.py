@@ -3,10 +3,11 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from sql.app import Application, get_app_for_module
-from sql.core.base import QueryContext
+from sql.core.base import Node, QueryContext
 from sql.db import ConnectionManager, TransactionContext
 from sql.fields.base import Field, ForeignField
 from sql.fields.fields import BigSerialField
+from sql.utils import quote_ident
 
 if TYPE_CHECKING:
     from sql.queries.base import ValuesQuery
@@ -52,6 +53,18 @@ class ModelMeta(type):
             return False
         return cls._table == other._table and cls._alias == other._alias
 
+    # --- Рекурсивные методы ----
+
+    def __iand__(cls: type[M], other: ValuesQuery):
+        return cls << (cls._query & other)
+
+    def __ior__(cls: type[M], other: ValuesQuery):
+        return cls << (cls._query | other)
+
+    def __lshift__(cls: type[M], other: Node):
+        cls._query = other
+        return cls
+
 
 class Model(metaclass=ModelMeta):
     _app: Application
@@ -60,8 +73,9 @@ class Model(metaclass=ModelMeta):
     _alias: str | None = None
     _fields: dict[str, Field] = {}
     _foreign_fields: dict[str, ForeignField[Model]] = {}
+    _recursive = False
 
-    id = BigSerialField()
+    id = BigSerialField(primary=True)
 
     @classmethod
     @lru_cache(maxsize=128)
@@ -74,9 +88,12 @@ class Model(metaclass=ModelMeta):
 
     @classmethod
     def __sql__(cls: type[Self], context: QueryContext) -> str:
+        if cls._recursive:
+            return quote_ident(context.get_alias(cls))
+
         if issubclass(cls, QueryModel):
-            return f'({cls._query.__sql__(context.sub())}) AS "{cls._alias}"'
-        return f'"{cls._table}" AS "{context.get_alias(cls)}"'
+            return f"({cls._query.__sql__(context.sub())}) AS {quote_ident(cls._alias)}"
+        return f"{quote_ident(cls._table)} AS {quote_ident(context.get_alias(cls))}"
 
     @classmethod
     def atomic(cls, checkpoint: bool = True):
@@ -94,11 +111,18 @@ class QueryModel(Model):
     @classmethod
     def factory(cls, query: ValuesQuery):
         alias = f"sub{id(query)}"
-        initial = {"_alias": alias, "_query": query}
+        initial = {
+            "_alias": alias,
+            "_query": query,
+        }
+
+        if relation := next(iter(query.relations), None):
+            initial["_app"] = relation._app
+
         cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
         for name, value in query._values.items():
             if isinstance(value, Field):
                 value.bind(cls, name)
             else:
-                Field().factory().bind(cls, name)
+                Field().bind(cls, name)
         return cls
