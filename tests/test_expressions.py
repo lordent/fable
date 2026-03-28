@@ -1,5 +1,10 @@
+from datetime import timedelta
+from uuid import uuid4
+
+import pytest
+
 from sql.core.base import QueryContext
-from sql.core.expressions import Cast, Expression, Func
+from sql.core.expressions import Cast, Expression, Func, Raw
 from sql.core.types import Types
 
 
@@ -81,3 +86,29 @@ def test_cast_explicit_type():
     assert isinstance(casted, Cast)
     assert casted.sql_type == Types.BIGINT
     assert "::BIGINT" in casted.__sql__(QueryContext())
+
+
+def test_raw_complex_types():
+    assert "::INTERVAL" in Raw(timedelta(hours=1)).__sql__(QueryContext())
+    assert "::UUID" in Raw(uuid4()).__sql__(QueryContext())
+    assert "::JSONB" in Raw([1, 2, 3]).__sql__(QueryContext())
+    assert "::JSONB" in Raw({"key": "val"}).__sql__(QueryContext())
+
+    with pytest.raises(TypeError, match="Тип <class 'set'> не поддерживается в Raw"):
+        Raw(set([1, 2]))
+
+
+def test_q_is_null_isolation():
+    q = FakeExpr("col") == None
+    assert "(col IS NULL)" == q.__sql__(QueryContext())
+
+    q_not = FakeExpr("col") != None
+    assert "(col IS NOT NULL)" == q_not.__sql__(QueryContext())
+
+
+def test_q_isolated_node_branch():
+    subquery = FakeExpr("SELECT 1")
+    subquery.isolated = True
+
+    q = FakeExpr("val") == subquery
+    assert "(val = (SELECT 1))" == q.__sql__(QueryContext())

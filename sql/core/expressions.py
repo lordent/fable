@@ -233,12 +233,14 @@ class Raw(Expression):
         return value
 
     def __sql__(self, context: QueryContext) -> str:
+        if type_ := self.sql_type or "":
+            type_ = f"::{type_}"
         return f"({
             ''.join(
                 self._value(a, context) if isinstance(a, Node) else str(a)
                 for a in self.args
             )
-        })"
+        }){type_}"
 
 
 class Ref(Expression):
