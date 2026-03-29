@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from sql.core.aggregates import Avg, Count, Sum
+from sql.core.case import Case
 from sql.core.expressions import Raw, Ref
 from sql.fields.fields import DecimalField
 from sql.queries.base import Query
@@ -229,12 +230,46 @@ async def test_recursive():
         )
 
     query = Select(*Tree).order_by(Tree.id.asc())
+
     assert [dict(record) for record in await query] == [
         {"id": 1, "name": "Электроника", "level": 0},
         {"id": 2, "name": "Аксессуары", "level": 1},
         {"id": 3, "name": "Гаджеты", "level": 2},
         {"id": 4, "name": "Бижутерия", "level": 2},
         {"id": 5, "name": "Одежда", "level": 0},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_case():
+    category_label = (
+        Case(default="Дешево")
+        .when(Sales.amount > 5000, "Премиум")
+        .when(Sales.amount > 1000, "Средне")
+    )
+
+    query = Select(Sales.id, segment=category_label).order_by(Sales.id)
+
+    assert [dict(record) for record in await query] == [
+        {"id": 1, "segment": "Средне"},
+        {"id": 2, "segment": "Средне"},
+        {"id": 3, "segment": "Средне"},
+        {"id": 4, "segment": "Средне"},
+    ]
+
+    points_calc = Sum(
+        Case(default=0)
+        .when(Users.tags.contains("premium"), Sales.amount * 2)
+        .when(Users.tags.contains("vip"), Sales.amount * 3)
+    )
+
+    query = Select(Users.name, total_points=points_calc).order_by(Users.name)
+
+    assert [dict(record) for record in await query] == [
+        {"name": "Алекс", "total_points": Decimal("0")},
+        {"name": "Александр", "total_points": Decimal("23000.00")},
+        {"name": "Алексанр", "total_points": Decimal("0")},
+        {"name": "Мария", "total_points": Decimal("23000.00")},
     ]
 
 

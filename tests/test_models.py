@@ -2,29 +2,29 @@ from sql.core.aggregates import Count
 from sql.core.base import QueryContext
 from sql.fields.base import ComputedField, Field, ForeignField
 from sql.fields.fields import BoolField, IntField, TextField
-from sql.models import Model
+from sql.models import TableModel
 from sql.queries.base import ValuesQuery
 
 # --- ТЕСТОВЫЕ МОДЕЛИ ---
 
 
-class User(Model):
-    _table = "users"
+class User(TableModel):
+    _source = "users"
     name = TextField()
     posts_count = ComputedField(expression=lambda: Count(Post.id))
 
 
-class Post(Model):
-    _table = "posts"
+class Post(TableModel):
+    _source = "posts"
     user_id = ForeignField(User)
     title = TextField()
 
 
-class Profile(Model):
+class Profile(TableModel):
     user = IntField()
 
 
-class Base(Model):
+class Base(TableModel):
     is_active = BoolField()
 
 
@@ -33,7 +33,7 @@ class Admin(User, Base):
 
 
 def test_model_initialization():
-    assert User._table == "users"
+    assert User._source == "users"
     assert User._alias == "User"
     assert "id" in User._fields
     assert isinstance(User.id, Field)
@@ -52,7 +52,7 @@ def test_model_as_alias():
     U1 = User["u1"]
     assert U1._virtual is True
     assert U1._alias == "User_u1"
-    assert U1._table == "users"
+    assert U1._source == "users"
 
     sql = U1.__sql__(QueryContext())
     assert sql == '"users" AS "User_u1"'
@@ -114,7 +114,7 @@ def test_computed_field():
 
 
 def test_computed_field_isolation():
-    class AnotherModel(Model):
+    class AnotherModel(TableModel):
         val = IntField()
         calc = ComputedField(expression=lambda: AnotherModel.val * 2)
 

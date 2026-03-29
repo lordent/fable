@@ -21,7 +21,7 @@ from sql.fields.fields import (
     TimestampField,
     TimeZoneField,
 )
-from sql.models import Model
+from sql.models import TableModel
 
 
 class FakeField(Expression):
@@ -63,19 +63,19 @@ async def db_cleanup():
     _sessions_ctx.reset(token)
 
 
-class Cities(Model):
+class Cities(TableModel):
     id = SerialField()
     name = TextField()
     timezone = TimeZoneField()
 
 
-class Categories(Model):
+class Categories(TableModel):
     id = SerialField()
     parent_id = ForeignField("Self", on_delete=ForeignField.CASCADE)
     name = TextField()
 
 
-class Shops(Model):
+class Shops(TableModel):
     id = SerialField()
     city_id = ForeignField(Cities, on_delete=ForeignField.CASCADE)
     name = TextField()
@@ -101,7 +101,7 @@ class Shops(Model):
         return normal | night
 
 
-class Users(Model):
+class Users(TableModel):
     id = SerialField()
     name = TextField()
     birth_date = DateField()
@@ -109,7 +109,7 @@ class Users(Model):
     metadata = JsonbField()
 
 
-class Sales(Model):
+class Sales(TableModel):
     id = SerialField()
     shop_id = ForeignField(Shops, on_delete=ForeignField.CASCADE)
     category_id = ForeignField(Categories, on_delete=ForeignField.CASCADE)
@@ -117,7 +117,7 @@ class Sales(Model):
     created_at = TimestampField()
 
 
-class Stores(Model):
+class Stores(TableModel):
     name = TextField()
     city_id = ForeignField(Cities)
     open_at = TimeField()

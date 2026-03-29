@@ -3,17 +3,17 @@ from sql.core.base import QueryContext
 from sql.core.functions import Rank
 from sql.fields.base import ForeignField
 from sql.fields.fields import IntField, TextField
-from sql.models import Model
+from sql.models import TableModel
 from sql.queries.select import GroupMode, Select
 
 
-class User(Model):
-    _table = "users"
+class User(TableModel):
+    _source = "users"
     name = TextField()
 
 
-class Order(Model):
-    _table = "orders"
+class Order(TableModel):
+    _source = "orders"
     user_id = ForeignField(User)
     amount = IntField()
 
@@ -90,8 +90,8 @@ def test_select_from_subquery_as_model():
 
 
 def test_complex_join_chains():
-    class City(Model):
-        _table = "cities"
+    class City(TableModel):
+        _source = "cities"
         name = TextField()
 
     query = Select(User.name, City.name).join(Order).join(City, on=(Order.amount > 0))

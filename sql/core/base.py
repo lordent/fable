@@ -35,12 +35,7 @@ class QueryContext:
         self.level = level
 
     def get_alias(self, model: type[Model]) -> str:
-        base_alias = model._alias
-        if self.level > 0 and not model._recursive:
-            final_alias = f"{base_alias}_s{self.level}"
-        else:
-            final_alias = base_alias
-        return final_alias
+        return model.__sql_alias__(self)
 
     def add_param(self, value: Any) -> str:
         self.params.append(value)

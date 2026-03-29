@@ -1,7 +1,7 @@
-from typing import Any
+from typing import Any, Self
 
 from sql.core.base import QueryContext
-from sql.core.expressions import Expression, Func
+from sql.core.expressions import Expression, Func, Q
 from sql.core.types import SqlType, Types
 
 
@@ -17,9 +17,10 @@ class Aggregate(Func):
         )
 
         self.distinct = distinct
+        self._filter: Q | None = None
 
     def _get_name(self):
-        return self.__class__.__name__
+        return self.__class__.__name__.upper()
 
     def _render_args(self, context: QueryContext) -> str:
         prefix = "DISTINCT " if self.distinct else ""
@@ -29,6 +30,15 @@ class Aggregate(Func):
         else:
             arg_sql = arg
         return f"{prefix}{arg_sql}"
+
+    def filter(self, condition: Q) -> Self:
+        self._filter = self._arg(condition)
+        return self
+
+    def _render_filter(self, context: QueryContext) -> str:
+        if not self._filter:
+            return ""
+        return f" FILTER (WHERE {self._filter.__sql__(context)})"
 
 
 class Count(Aggregate):

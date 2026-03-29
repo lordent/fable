@@ -9,7 +9,7 @@ from sql.queries.base import RecursiveContext, ValuesQuery
 from sql.utils import quote_ident
 
 from ..core.base import OrderBy, QueryContext
-from ..models import Model
+from ..models import Model, RecursiveModel, TableModel
 from .values import Item, List
 
 
@@ -123,7 +123,7 @@ class Select(ValuesQuery):
                 if (to := field.to) in self.relations and to != target:
                     on = field == to.id
                     break
-            if not on:
+            if not on and issubclass(target, TableModel):
                 for rel in self.relations:
                     if rel == target:
                         continue
@@ -188,13 +188,10 @@ class Select(ValuesQuery):
         sql = []
 
         if not context.level and (
-            recursives := [m for m in self.relations if m._recursive]
+            recursives := [m for m in self.relations if issubclass(m, RecursiveModel)]
         ):
             cte_context = context.sub()
-            ctes = ", ".join(
-                f"{quote_ident(m._alias)} AS ({m._query.__sql__(cte_context)})"
-                for m in recursives
-            )
+            ctes = ", ".join(m.__sql__(cte_context) for m in recursives)
             sql.append(f"WITH RECURSIVE {ctes}")
 
         sql.append(f"SELECT {', '.join(cols)}")
@@ -202,12 +199,28 @@ class Select(ValuesQuery):
         if main_models := sorted(
             self.relations - self._joins.keys(), key=lambda m: m._virtual, reverse=True
         ):
-            sql.append(f"FROM {', '.join(m.__sql__(context) for m in main_models)}")
+            sql.append(
+                f"FROM {
+                    ', '.join(
+                        (
+                            m.__sql_alias__(context)
+                            if issubclass(m, RecursiveModel)
+                            else m.__sql__(context)
+                        )
+                        for m in main_models
+                    )
+                }"
+            )
 
-        for target, join_data in self._joins.items():
+        for m, join_data in self._joins.items():
             strategy = join_data["strategy"].value
             on_sql = join_data["on"].__sql__(context)
-            sql.append(f"{strategy} {target.__sql__(context)} ON {on_sql}")
+            target_sql = (
+                m.__sql_alias__(context)
+                if issubclass(m, RecursiveModel)
+                else m.__sql__(context)
+            )
+            sql.append(f"{strategy} {target_sql} ON {on_sql}")
 
         if self._where:
             sql.append(f"WHERE {self._where.__sql__(context)}")

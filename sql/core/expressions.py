@@ -17,6 +17,7 @@ from sql.core.window import Window
 from sql.utils import extract_template, quote_ident
 
 if TYPE_CHECKING:
+    from sql.core.aggregates import Aggregate
     from sql.fields.base import Field
 
 
@@ -305,6 +306,24 @@ class Func(Expression):
         if self.window:
             sql = f"{sql} OVER ({self.window.__sql__(context)})"
         return sql
+
+
+class WindowFunction(Expression):
+    def __init__(self, source: Aggregate, window: Window):
+        super().__init__(is_windowed=True, sql_type=source.sql_type)
+        self.source = self._arg(source)
+        self.window = self._arg(window)
+
+    def __sql__(self, context: QueryContext) -> str:
+        source_sql = self.source.__sql__(context)
+        filter_sql = (
+            self.source._render_filter(context)
+            if hasattr(self.source, "_render_filter")
+            else ""
+        )
+        window_sql = self.window.__sql__(context)
+
+        return f"{source_sql}{filter_sql} OVER ({window_sql})"
 
 
 def Coalesce(*args: Any, sql_type: SqlType | None = None):

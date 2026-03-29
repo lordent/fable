@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from sql.app import Application, get_app_for_module
 from sql.core.base import Node, QueryContext
+from sql.core.expressions import Expression
 from sql.db import ConnectionManager, TransactionContext
 from sql.fields.base import Field, ForeignField
 from sql.fields.fields import BigSerialField
@@ -17,7 +18,8 @@ M = TypeVar("M", bound="Model")
 
 class ModelMeta(type):
     def __new__(mcs, name: str, bases: tuple[type[Model], ...], attrs: dict[str, Any]):
-        attrs.setdefault("_table", name.lower())
+        attrs.setdefault("_virtual", False)
+        attrs.setdefault("_source", name.lower())
         attrs.setdefault("_alias", name)
         attrs.setdefault("_app", None)
         attrs["_fields"] = {}
@@ -51,31 +53,35 @@ class ModelMeta(type):
     def __eq__(cls: type[M], other: type[Model]) -> bool:
         if not isinstance(other, ModelMeta):
             return False
-        return cls._table == other._table and cls._alias == other._alias
+        return cls._source == other._source and cls._alias == other._alias
 
-    # --- Рекурсивные методы ----
 
-    def __iand__(cls: type[M], other: ValuesQuery):
-        return cls << (cls._query & other)
+class QueryModelMeta(ModelMeta):
+    def __new__(mcs, name, bases, attrs):
+        attrs["_virtual"] = True
 
-    def __ior__(cls: type[M], other: ValuesQuery):
-        return cls << (cls._query | other)
+        return super().__new__(mcs, name, bases, attrs)
 
-    def __lshift__(cls: type[M], other: Node):
-        cls._query = other
+
+class RecursiveModelMeta(QueryModelMeta):
+    def __iand__(cls: type[RecursiveModel], other: ValuesQuery):
+        return cls << (cls._source & other)
+
+    def __ior__(cls: type[RecursiveModel], other: ValuesQuery):
+        return cls << (cls._source | other)
+
+    def __lshift__(cls: type[RecursiveModel], other: Node):
+        cls._source = other
         return cls
 
 
 class Model(metaclass=ModelMeta):
     _app: Application
     _virtual = False
-    _table: str
+    _source: str
     _alias: str | None = None
     _fields: dict[str, Field] = {}
-    _foreign_fields: dict[str, ForeignField[Model]] = {}
-    _recursive = False
-
-    id = BigSerialField(primary=True)
+    _foreign_fields: dict[str, ForeignField[TableModel]] = {}
 
     @classmethod
     @lru_cache(maxsize=128)
@@ -83,17 +89,24 @@ class Model(metaclass=ModelMeta):
         return type(
             f"{cls.__name__}_{alias}",
             (cls,),
-            {"_alias": f"{cls._alias}_{alias}", "_table": cls._table, "_virtual": True},
+            {
+                "_alias": f"{cls._alias}_{alias}",
+                "_source": cls._source,
+                "_virtual": True,
+                "__module__": cls.__module__,
+            },
         )
 
     @classmethod
-    def __sql__(cls: type[Self], context: QueryContext) -> str:
-        if cls._recursive:
-            return quote_ident(context.get_alias(cls))
+    def __sql__(cls: type[Self], context: QueryContext):
+        return f"{quote_ident(cls._source)} AS {quote_ident(context.get_alias(cls))}"
 
-        if issubclass(cls, QueryModel):
-            return f"({cls._query.__sql__(context.sub())}) AS {quote_ident(cls._alias)}"
-        return f"{quote_ident(cls._table)} AS {quote_ident(context.get_alias(cls))}"
+    @classmethod
+    def __sql_alias__(cls: type[Self], context: QueryContext):
+        base_alias = cls._alias
+        if context.level > 0:
+            return f"{base_alias}_s{context.level}"
+        return base_alias
 
     @classmethod
     def atomic(cls, checkpoint: bool = True):
@@ -104,25 +117,52 @@ class Model(metaclass=ModelMeta):
         return ConnectionManager(cls._app.name)
 
 
-class QueryModel(Model):
+class TableModel(Model):
     _virtual = True
-    _query: ValuesQuery
+
+    id = BigSerialField(primary=True)
+
+
+class QueryModel(Model, metaclass=QueryModelMeta):
+    _source: ValuesQuery
 
     @classmethod
-    def factory(cls, query: ValuesQuery):
-        alias = f"sub{id(query)}"
+    def factory(cls: type[Self], source: ValuesQuery):
+        alias = f"sub{id(source)}"
         initial = {
             "_alias": alias,
-            "_query": query,
+            "_source": source,
         }
 
-        if relation := next(iter(query.relations), None):
-            initial["_app"] = relation._app
+        for relation in source.relations:
+            if app := relation._app:
+                initial["_app"] = app
+                initial["__module__"] = relation.__module__
+                break
 
         cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
-        for name, value in query._values.items():
+        for name, value in source._values.items():
             if isinstance(value, Field):
                 value.bind(cls, name)
             else:
-                Field().bind(cls, name)
+                Field(
+                    sql_type=(
+                        value.sql_type if isinstance(value, Expression) else None
+                    ),
+                ).bind(cls, name)
+
         return cls
+
+    @classmethod
+    def __sql__(cls: type[Self], context: QueryContext):
+        return f"({cls._source.__sql__(context.sub())}) AS {quote_ident(cls._alias)}"
+
+
+class RecursiveModel(QueryModel, metaclass=RecursiveModelMeta):
+    @classmethod
+    def __sql__(cls: type[Self], context: QueryContext):
+        return f"{quote_ident(cls._alias)} AS ({cls._source.__sql__(context)})"
+
+    @classmethod
+    def __sql_alias__(cls: type[Self], context: QueryContext):
+        return cls._alias
