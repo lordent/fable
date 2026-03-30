@@ -1,10 +1,11 @@
-from sql.core.aggregates import Count, Sum
-from sql.core.base import QueryContext
 from sql.core.functions import Rank
 from sql.fields.base import ForeignField
 from sql.fields.fields import IntField, TextField
 from sql.models import TableModel
 from sql.queries.select import GroupMode, Select
+
+from sql.core.aggregates import Count, Sum
+from sql.core.base import QueryContext
 
 
 class User(TableModel):

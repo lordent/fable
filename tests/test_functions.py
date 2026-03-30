@@ -1,6 +1,7 @@
-from sql.core.base import QueryContext
 from sql.core.expressions import Coalesce, Func
 from sql.core.functions import Age, Extract, Now, Rank
+
+from sql.core.base import QueryContext
 from sql.core.types import Types
 from tests.conftest import FakeField
 

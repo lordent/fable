@@ -4,11 +4,11 @@ from enum import StrEnum
 from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, TypeVar
 
-from sql.core.base import QueryContext
-from sql.core.expressions import Expression, Q, ScalarExpression
-from sql.core.types import SqlType, Types
-from sql.functions import Concat
+from sql.core.expressions import Concat, Expression, Q
 from sql.utils import quote_ident
+
+from sql.core.base import QueryContext
+from sql.core.types import SqlType, Types
 
 if TYPE_CHECKING:
     from ..models import Model
@@ -32,7 +32,7 @@ class FieldMeta(type):
         return instance
 
 
-class Field(ScalarExpression, metaclass=FieldMeta):
+class Field(Expression, metaclass=FieldMeta):
     _blueprint: tuple[tuple, dict]
     sql_type: SqlType = Types.TEXT
 

@@ -1,5 +1,6 @@
-from sql.core.base import OrderBy, OrderDirections, QueryContext
 from sql.core.expressions import Expression, Window
+
+from sql.core.base import OrderBy, OrderDirections, QueryContext
 
 
 class MockExpr(Expression):

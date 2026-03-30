@@ -1,15 +1,33 @@
 from enum import StrEnum
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-from sql.core.converters import get_converter
-
 if TYPE_CHECKING:
-    from sql.models import Model
+    from ..models import Model
+
+
+_CONVERTERS: dict[type, type[Node]] = {}
+
+
+def register_converter(from_type: type):
+    def wrapper(converter_cls: type[Node]):
+        _CONVERTERS[from_type] = converter_cls
+        return converter_cls
+
+    return wrapper
+
+
+@lru_cache
+def _get_converter(value_type: type) -> type[Node] | None:
+    if converter := _CONVERTERS.get(value_type):
+        return converter
+
+    for target_type, converter in _CONVERTERS.items():
+        if issubclass(value_type, target_type):
+            return converter
 
 
 class QueryContext:
-    __slots__ = "params", "level"
-
     def __init__(self, params: list = None, level: int = 0):
         self.params = params if params is not None else []
         self.level = level
@@ -32,8 +50,8 @@ class Node:
     def __init__(self):
         self.relations = set()
 
-    def _arg(self, value: Any) -> Node:
-        if converter := get_converter(type(value)):
+    def _arg(self, value: Any):
+        if converter := _get_converter(type(value)):
             value: Node = converter(value)
 
         if isinstance(value, Node) and not value.isolated:
@@ -41,7 +59,7 @@ class Node:
 
         return value
 
-    def _list_arg(self, value: Any) -> list[Node]:
+    def _list_arg(self, value: Any):
         if value is None:
             return []
         if isinstance(value, (list, tuple, set)):
@@ -85,21 +103,10 @@ class OrderDirections(StrEnum):
 
 
 class OrderBy(WrappedNodeMixin, Node):
-    Direction = OrderDirections
-
-    def __init__(
-        self, wrapped: Node, direction: OrderDirections, nulls_first: bool = None
-    ):
+    def __init__(self, wrapped: Node, direction: OrderDirections):
         super().__init__(wrapped=wrapped)
 
-        self.direction, self.nulls_first = direction, nulls_first
+        self.direction = direction
 
     def __sql__(self, context: QueryContext):
-        sql = f"{super().__sql__(context)} {self.direction.value}"
-
-        if self.nulls_first is True:
-            sql += " NULLS FIRST"
-        elif self.nulls_first is False:
-            sql += " NULLS LAST"
-
-        return sql
+        return f"{super().__sql__(context)} {self.direction.value}"

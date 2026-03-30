@@ -2,9 +2,9 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from sql.core.expressions import Cast, Expression, Func, Raw
 
 from sql.core.base import QueryContext
-from sql.core.expressions import Cast, Expression, Func, Raw
 from sql.core.types import Types
 
 

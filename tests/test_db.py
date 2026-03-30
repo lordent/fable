@@ -1,14 +1,14 @@
 from decimal import Decimal
 
 import pytest
+from sql.queries.base import Query
+from sql.queries.select import Select
+from sql.queries.values import Item, List
 
 from sql.core.aggregates import Avg, Count, Sum
 from sql.core.case import Case
 from sql.core.expressions import Raw, Ref
 from sql.fields.fields import DecimalField
-from sql.queries.base import Query
-from sql.queries.select import Select
-from sql.queries.values import Item, List
 
 from .conftest import Categories, Cities, Sales, Shops, Users
 
@@ -164,6 +164,8 @@ async def test_json_list_empty_coalesce():
 
 @pytest.mark.asyncio
 async def test_join():
+    res = Sum(Sales.amount) / Sum(Sales.amount)
+
     query = (
         Select(
             Categories.name,

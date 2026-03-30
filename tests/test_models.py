@@ -1,9 +1,10 @@
-from sql.core.aggregates import Count
-from sql.core.base import QueryContext
 from sql.fields.base import ComputedField, Field, ForeignField
 from sql.fields.fields import BoolField, IntField, TextField
 from sql.models import TableModel
 from sql.queries.base import ValuesQuery
+
+from sql.core.aggregates import Count
+from sql.core.base import QueryContext
 
 # --- ТЕСТОВЫЕ МОДЕЛИ ---
 

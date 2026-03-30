@@ -1,67 +1,50 @@
-from enum import StrEnum
 from typing import Any
 
+from sql.core.aggregates import AggregateExpression
 from sql.core.base import QueryContext
-from sql.core.expressions import Expression, Func, Raw
-from sql.core.types import Types
+from sql.core.expressions import Expression, ScalarExpression
+from sql.core.types import SqlType
+from sql.typings import typewith
 
 
-def Rank():
-    return Func("RANK")
+class FuncMixin(typewith(Expression)):
+    name: str = None
+
+    def __init_subclass__(cls):
+        if not cls.name:
+            cls.name = cls.__name__.upper()
+        return super().__init_subclass__()
+
+    def __init__(self, *args: Any, sql_type: SqlType = None):
+        super().__init__(sql_type=sql_type)
+
+        self.args = self._list_arg(args)
+
+    def _render_args(self, context: QueryContext, prefix: str = "") -> str:
+        args_sql = ", ".join(
+            "*" if a == "*" else self._value(a, context) for a in self.args
+        )
+        return f"{self.name}({prefix}{args_sql})"
 
 
-def DenseRank():
-    return Func("DENSE_RANK")
+class ScalarFunc(FuncMixin, ScalarExpression):
+    def __sql__(self, context: QueryContext) -> str:
+        return self._render_args(context)
 
 
-def RowNumber():
-    return Func("ROW_NUMBER")
+class AggregateFunc(FuncMixin, AggregateExpression):
+    def __init__(self, *args: Any, sql_type=None, distinct: bool = False):
+        super().__init__(*args, sql_type=sql_type)
 
-
-def Now():
-    return Func("NOW")
-
-
-def Age(source: Any, relative_to: Any | None = None):
-    args = [source]
-    if relative_to is not None:
-        args.append(relative_to)
-
-    return Func("AGE", *args, sql_type=Types.INTERVAL)
-
-
-class DatePart(StrEnum):
-    YEAR = "YEAR"
-    MONTH = "MONTH"
-    DAY = "DAY"
-    HOUR = "HOUR"
-    MINUTE = "MINUTE"
-    SECOND = "SECOND"
-    WEEK = "WEEK"
-    QUARTER = "QUARTER"
-    EPOCH = "EPOCH"
-    DOW = "DOW"
-    DOY = "DOY"
-
-
-class Extract(Expression):
-    YEAR = DatePart.YEAR
-    MONTH = DatePart.MONTH
-    DAY = DatePart.DAY
-    HOUR = DatePart.HOUR
-    MINUTE = DatePart.MINUTE
-    SECOND = DatePart.SECOND
-    WEEK = DatePart.WEEK
-    QUARTER = DatePart.QUARTER
-    EPOCH = DatePart.EPOCH
-    DOW = DatePart.DOW
-    DOY = DatePart.DOY
-
-    def __init__(self, source: Any, part: DatePart):
-        super().__init__(sql_type=Types.INTEGER)
-
-        self.source = self._arg(source)
-        self.part = part
+        self.distinct = distinct
 
     def __sql__(self, context: QueryContext) -> str:
-        return Raw(t"EXTRACT({self.part.value} FROM {self.source})").__sql__(context)
+        prefix = "DISTINCT " if self.distinct else ""
+        return self._render_args(context, prefix)
+
+
+class UnaryAggregate(AggregateFunc):
+    def __init__(
+        self, expression: Expression, distinct: bool = False, sql_type: SqlType = None
+    ):
+        super().__init__(expression, distinct=distinct, sql_type=sql_type)
