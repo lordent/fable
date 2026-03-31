@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 
 import asyncpg
@@ -7,7 +5,6 @@ import pytest
 import pytest_asyncio
 
 from sql.core.expressions import Expression
-from sql.core.functions import Now
 from sql.db import Config, Engine, _sessions_ctx
 from sql.fields.base import ForeignField
 from sql.fields.fields import (
@@ -15,12 +12,12 @@ from sql.fields.fields import (
     DateField,
     DecimalField,
     JsonbField,
-    SerialField,
     TextField,
     TimeField,
     TimestampField,
     TimeZoneField,
 )
+from sql.functions import Now
 from sql.models import TableModel
 
 
@@ -64,19 +61,16 @@ async def db_cleanup():
 
 
 class Cities(TableModel):
-    id = SerialField()
     name = TextField()
     timezone = TimeZoneField()
 
 
 class Categories(TableModel):
-    id = SerialField()
     parent_id = ForeignField("Self", on_delete=ForeignField.CASCADE)
     name = TextField()
 
 
 class Shops(TableModel):
-    id = SerialField()
     city_id = ForeignField(Cities, on_delete=ForeignField.CASCADE)
     name = TextField()
     open_at = TimeField()
@@ -102,7 +96,6 @@ class Shops(TableModel):
 
 
 class Users(TableModel):
-    id = SerialField()
     name = TextField()
     birth_date = DateField()
     tags = ArrayField(TextField())
@@ -110,7 +103,6 @@ class Users(TableModel):
 
 
 class Sales(TableModel):
-    id = SerialField()
     shop_id = ForeignField(Shops, on_delete=ForeignField.CASCADE)
     category_id = ForeignField(Categories, on_delete=ForeignField.CASCADE)
     amount = DecimalField(precision=12, scale=2)

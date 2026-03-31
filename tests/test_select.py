@@ -1,8 +1,7 @@
-from sql.core.aggregates import Count, Sum
 from sql.core.base import QueryContext
-from sql.core.functions import Rank
 from sql.fields.base import ForeignField
 from sql.fields.fields import IntField, TextField
+from sql.functions import Count, Rank, Sum
 from sql.models import TableModel
 from sql.queries.select import GroupMode, Select
 
@@ -126,3 +125,66 @@ def test_limit_offset_rendering():
     query = Select(User.name).limit(10).offset(5)
     sql = query.__sql__(QueryContext())
     assert sql.endswith("LIMIT 10 OFFSET 5")
+
+
+def test_self_join_aliases_and_params():
+    Manager = User["m"]
+    query = (
+        Select(User.name, manager_name=Manager.name)
+        .join(Manager, on=(User.id == Manager.id))
+        .filter(User.name == "Worker")
+        .filter(Manager.name == "Boss")
+    )
+    sql, *params = query.prepare()
+    assert '"users" AS "User"' in sql
+    assert '"users" AS "User_m"' in sql
+    assert params == ["Worker", "Boss"]
+
+
+def test_jsonb_build_complex_nesting():
+    order_item = Select.Item(id=Order.id, val=Order.amount)
+    orders_list = Select.List(order_item=order_item)
+
+    query = Select(User.name, user_orders=orders_list).join(Order)
+    sql = query.__sql__(QueryContext())
+
+    assert "JSONB_BUILD_OBJECT" in sql
+    assert "JSONB_AGG" in sql
+    assert "COALESCE" in sql
+    assert 'GROUP BY "User"."name"' in sql
+
+
+def test_empty_in_clause_safety():
+    query = Select(User.name).filter(User.id == [])
+    sql = query.__sql__(QueryContext())
+
+    assert "(1=0)" in sql
+    assert "IN ()" not in sql
+
+
+def test_triple_nested_subquery_aliases():
+    L3 = Select(User.id, User.name).as_model()
+    L2 = Select(L3.id, L3.name).filter(L3.id > 10).as_model()
+    query = Select(L2.name).filter(L2.id < 100)
+    sql = query.__sql__(QueryContext())
+
+    assert "User_s2" in sql
+    assert L3._alias in sql
+    assert L2._alias in sql
+
+
+def test_template_to_concat_conversion():
+    tpl = t"User: {User.name} (ID: {User.id})"
+    query = Select(info=tpl, name=User.name, id=User.id)
+    sql, *params = query.prepare()
+
+    assert params == ["User: ", " (ID: ", ")"]
+    assert '($1 || "User"."name" || $2 || "User"."id" || $3) AS "info"' in sql
+
+
+def test_array_operator_typing():
+    query = Select(User.id).filter(User.id == [1, 2, 3])
+    sql, *params = query.prepare()
+
+    assert "= ANY($1::BIGSERIAL[])" in sql
+    assert params == [[1, 2, 3]]

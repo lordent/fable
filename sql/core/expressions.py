@@ -1,166 +1,322 @@
-from datetime import date, datetime, timedelta
-from decimal import Decimal
-from string.templatelib import Template
-from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from enum import StrEnum
+from types import EllipsisType
+from typing import TYPE_CHECKING, Any, Literal, Self, overload
 
-from sql.core.base import (
-    Node,
-    OrderBy,
-    OrderDirections,
-    QueryContext,
-    WrappedNodeMixin,
-    register_converter,
-)
+from sql.core.base import COLLECTION_TYPES, Node, OrderBy, QueryContext
 from sql.core.types import SqlType, Types
-from sql.core.window import Window
-from sql.utils import extract_template, quote_ident
+from sql.typings import typewith
 
 if TYPE_CHECKING:
-    from sql.core.aggregates import Aggregate
     from sql.fields.base import Field
 
 
-class Expression(Node):
-    sql_type: SqlType | None = None
-    is_aggregate = False
-    is_windowed = False
+type T_SqlType = SqlType | Field | None
 
-    def __init__(
-        self,
-        sql_type: SqlType | None = None,
-        is_aggregate=False,
-        is_windowed=False,
-    ):
+
+def q(
+    left: Expression, op: str, right: Expression, sql_type: T_SqlType = None
+) -> Q | AggregateQ:
+    return next(
+        (AggregateQ for a in (left, right) if isinstance(a, AggregateExpression)),
+        Q,
+    )(left, op, right, sql_type=sql_type)
+
+
+class Expression(Node):
+    sql_type: T_SqlType = None
+
+    def __init__(self, sql_type: str = None):
         super().__init__()
 
         self.sql_type = sql_type or self.sql_type
-        self.is_aggregate = is_aggregate
-        self.is_windowed = is_windowed
 
-    def _arg(self, value: Any):
-        value = super()._arg(value)
+    # --- Подсветка типов ---
 
-        if isinstance(value, Expression):
-            self.is_aggregate |= value.is_aggregate
-            self.is_windowed |= value.is_windowed
-            if self.sql_type is None:
-                self.sql_type = value.sql_type
+    @overload
+    def __add__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __add__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __add__(self: ScalarExpression, other: Any) -> Q: ...
 
-        return value
+    @overload
+    def __sub__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __sub__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __sub__(self: ScalarExpression, other: Any) -> Q: ...
 
-    # --- Логические операции ---
+    @overload
+    def __mul__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __mul__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __mul__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __and__(self, other: Any) -> Q:
-        return Q(self, "AND", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __truediv__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __truediv__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __truediv__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __or__(self, other: Any) -> Q:
-        return Q(self, "OR", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __mod__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __mod__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __mod__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __invert__(self) -> Q:
-        return Q(None, "NOT", self, sql_type=Types.BOOLEAN)
+    @overload
+    def __eq__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __eq__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __eq__(self: ScalarExpression, other: Any) -> Q: ...
 
-    # --- Сравнение ---
+    @overload
+    def __ne__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __ne__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __ne__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __eq__(self, other: Any) -> Q:
-        if other is None:
-            return Q(self, "IS NULL", None)
-        if isinstance(other, (list, tuple, set)):
-            return Q(self, "IN", other)
-        return Q(self, "=", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __gt__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __gt__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __gt__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __ne__(self, other: Any) -> Q:
-        if other is None:
-            return Q(self, "IS NOT NULL", None)
-        return Q(self, "!=", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __ge__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __ge__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __ge__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __lt__(self, other: Any) -> Q:
-        return Q(self, "<", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __lt__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __lt__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __lt__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __le__(self, other: Any) -> Q:
-        return Q(self, "<=", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __le__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __le__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __le__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __gt__(self, other: Any) -> Q:
-        return Q(self, ">", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __and__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __and__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __and__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __ge__(self, other: Any) -> Q:
-        return Q(self, ">=", other, sql_type=Types.BOOLEAN)
+    @overload
+    def __or__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __or__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __or__(self: ScalarExpression, other: Any) -> Q: ...
 
-    # --- Арифметика ---
+    @overload
+    def __invert__(self: AggregateExpression, other: Any) -> AggregateQ: ...
+    @overload
+    def __invert__(self: Any, other: AggregateExpression) -> AggregateQ: ...
+    @overload
+    def __invert__(self: ScalarExpression, other: Any) -> Q: ...
 
-    def __add__(self, other: Any) -> Q:
-        return Q(self, "+", other, sql_type=self.sql_type)
+    # -- Преобразование типов ---
 
-    def __sub__(self, other: Any) -> Q:
-        return Q(self, "-", other, sql_type=self.sql_type)
+    @overload
+    def cast(self: AggregateExpression, to: T_SqlType) -> AggregateCast: ...
 
-    def __mul__(self, other: Any) -> Q:
-        return Q(self, "*", other, sql_type=self.sql_type)
+    @overload
+    def cast(self: ScalarExpression, to: T_SqlType) -> Cast: ...
 
-    def __truediv__(self, other: Any) -> Q:
-        return Q(self, "/", other, sql_type=self.sql_type)
+    def cast(self, to: T_SqlType) -> Cast | AggregateCast:
+        return (AggregateCast if isinstance(self, AggregateExpression) else Cast)(
+            self, to
+        )
 
-    def __mod__(self, other: Any) -> Q:
-        return Q(self, "%", other, sql_type=self.sql_type)
+    @overload
+    def __rshift__(self: AggregateExpression, to: T_SqlType) -> AggregateCast: ...
+
+    @overload
+    def __rshift__(self: ScalarExpression, to: T_SqlType) -> Cast: ...
+
+    def __rshift__(self, to: T_SqlType) -> Cast | AggregateCast:
+        return self.cast(to)
+
+    # -- Таймзона ---
+
+    @overload
+    def at_timezone(
+        self: AggregateExpression, zone: str | Expression
+    ) -> AggregateAtTimeZone: ...
+
+    @overload
+    def at_timezone(self: ScalarExpression, zone: str | Expression) -> AtTimeZone: ...
+
+    def at_timezone(self, zone: str | Expression) -> AtTimeZone | AggregateAtTimeZone:
+        return (
+            AggregateAtTimeZone if isinstance(self, AggregateExpression) else AtTimeZone
+        )(self, zone)
+
+    # -- Coalesce ---
+
+    @overload
+    def default(self: AggregateExpression, other: Any) -> AggregateCoalesce: ...
+
+    @overload
+    def default(
+        self: ScalarExpression, other: AggregateExpression
+    ) -> AggregateCoalesce: ...
+
+    @overload
+    def default(self: ScalarExpression, other: Any) -> Coalesce: ...
+
+    def default(self, other: Any) -> Coalesce | AggregateCoalesce:
+        return (
+            AggregateCoalesce
+            if isinstance(self, AggregateExpression)
+            or isinstance(other, AggregateExpression)
+            else Coalesce
+        )(self, other, sql_type=self.sql_type)
 
     # --- Сортировка ---
 
-    def asc(self) -> OrderBy:
-        return OrderBy(self, OrderDirections.ASC)
+    def asc(self, nulls_first=None) -> OrderBy:
+        return OrderBy(self, OrderBy.Direction.ASC, nulls_first)
 
-    def desc(self) -> OrderBy:
-        return OrderBy(self, OrderDirections.DESC)
+    def desc(self, nulls_first=None) -> OrderBy:
+        return OrderBy(self, OrderBy.Direction.DESC, nulls_first)
 
-    # --- Приведение типов ---
+    # --- Логические операции ---
 
-    def cast(self, to: str | SqlType | type[Field] | Field):
-        return Cast(self, to)
+    def __and__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "AND", other, sql_type=Types.BOOLEAN)
 
-    def __rshift__(self, to: str | SqlType | type[Field] | Field):
-        return self.cast(to)
+    def __or__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "OR", other, sql_type=Types.BOOLEAN)
 
-    def at_timezone(self, zone: str | Expression):
-        return AtTimeZone(self, zone)
+    def __invert__(self) -> Q | AggregateQ:
+        return q(None, "NOT", self, sql_type=Types.BOOLEAN)
+
+    # --- Сравнение ---
+
+    def __eq__(self, other: Any) -> Q | AggregateQ:
+        if other is None:
+            return q(self, "IS NULL", None, sql_type=Types.BOOLEAN)
+        if isinstance(other, COLLECTION_TYPES):
+            return q(self, "IN", other, sql_type=Types.BOOLEAN)
+        return q(self, "=", other, sql_type=Types.BOOLEAN)
+
+    def __ne__(self, other: Any) -> Q | AggregateQ:
+        if other is None:
+            return q(self, "IS NOT NULL", None)
+        return q(self, "!=", other, sql_type=Types.BOOLEAN)
+
+    def __lt__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "<", other, sql_type=Types.BOOLEAN)
+
+    def __le__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "<=", other, sql_type=Types.BOOLEAN)
+
+    def __gt__(self, other: Any) -> Q | AggregateQ:
+        return q(self, ">", other, sql_type=Types.BOOLEAN)
+
+    def __ge__(self, other: Any) -> Q | AggregateQ:
+        return q(self, ">=", other, sql_type=Types.BOOLEAN)
+
+    # --- Арифметика ---
+
+    def __add__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "+", other)
+
+    def __sub__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "-", other)
+
+    def __mul__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "*", other)
+
+    def __truediv__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "/", other)
+
+    def __mod__(self, other: Any) -> Q | AggregateQ:
+        return q(self, "%", other)
 
     # --- Массивы и JSON ---
 
-    def contains(self, other: Any) -> Q:
-        return Q(
+    def contains(self, other: Any) -> Q | AggregateQ:
+        return q(
             self,
             "@>",
-            [other] if not isinstance(other, (list, tuple, set)) else other,
+            [other] if not isinstance(other, COLLECTION_TYPES) else other,
             sql_type=Types.BOOLEAN,
         )
 
-    def overlap(self, other: Any) -> Q:
-        return Q(self, "&&", other, sql_type=Types.BOOLEAN)
+    def overlap(self, other: Any) -> Q | AggregateQ:
+        return q(self, "&&", other, sql_type=Types.BOOLEAN)
 
-    def __getitem__(self, key: str | int) -> Q:
-        return Q(self, "->", str(key), sql_type=Types.JSONB)
+    def __getitem__(self, key: str | int) -> Q | AggregateQ:
+        return q(self, "->", str(key), sql_type=Types.JSONB)
 
-    def text(self, key: str | int) -> Q:
-        return Q(self, "->>", str(key), sql_type=Types.TEXT)
+    def text(self, key: str | int) -> Q | AggregateQ:
+        return q(self, "->>", str(key), sql_type=Types.TEXT)
 
     # --- Разное ---
 
-    def default(self, other: Any):
-        return Coalesce(self, other)
+    def dist(self, other: Any) -> Q | AggregateQ:
+        return q(self, "<->", other, sql_type=Types.DOUBLE_PRECISION)
 
-    def dist(self, other: Any) -> Q:
-        return Q(self, "<->", other, sql_type=Types.DOUBLE_PRECISION)
+
+# -- Скаляры --
+
+
+class ScalarExpression(Expression):
+    pass
+
+
+class Cast(ScalarExpression):
+    def __init__(self, expression: Expression, to: T_SqlType):
+        if isinstance(to, Expression):
+            sql_type = to.sql_type
+        else:
+            sql_type = to
+
+        super().__init__(sql_type=sql_type)
+
+        self.expression = self._arg(expression)
+
+    def __sql__(self, context: QueryContext):
+        return f"({self.expression.__sql__(context)})::{self.sql_type}"
 
 
 NEGATION_OPS = {"!=", "NOT IN", "<>"}
 ARRAY_OPS = {"=", "IN"} | NEGATION_OPS
 
 
-class Q(Expression):
-    def __init__(self, left: Any, op: str, right: Any, sql_type: SqlType | None = None):
+class Q(ScalarExpression):
+    def __init__(self, left: Any, op: str, right: Any, sql_type: T_SqlType = None):
         super().__init__(sql_type=sql_type)
 
-        self.left = self._arg(left)
-        self.op = op
-        self.right = self._arg(right)
+        self.left, self.op, self.right = self._arg(left), op, self._arg(right)
+
+        if not sql_type:
+            self.sql_type = self._sql_type()
+
+    def _sql_type(self):
+        left_sql_type, right_sql_type = None, None
+        if isinstance(self.left, Expression):
+            left_sql_type = self.left.sql_type
+        if isinstance(self.right, Expression):
+            right_sql_type = self.right.sql_type
+        return left_sql_type or right_sql_type
 
     def __sql__(self, context: QueryContext) -> str:
         left, op, right = self.left, self.op, self.right
@@ -193,138 +349,205 @@ class Q(Expression):
         return f"({l_sql} {op} {r_sql})"
 
 
-@register_converter(Template)
-class Concat(Expression):
-    def __init__(self, value: Any, *args: Any):
-        super().__init__(sql_type=Types.TEXT)
+class FuncMixin(typewith(Expression)):
+    name: str = None
 
-        if isinstance(value, Template):
-            self.args = [self._arg(a) for a in extract_template(value)]
-        else:
-            self.args = [self._arg(a) for a in (value, *args)]
+    def __init__(self, *args: Any, sql_type: T_SqlType = None):
+        super().__init__(sql_type=sql_type)
 
+        self.args = self._list_arg(args)
+
+    def __sql_args__(self, context: QueryContext, prefix: str = "") -> str:
+        args_sql = ", ".join(self._value(a, context) for a in self.args)
+        return f"{self.name or self.__class__.__name__.upper()}({prefix}{args_sql})"
+
+
+class ScalarFunc(FuncMixin, ScalarExpression):
     def __sql__(self, context: QueryContext) -> str:
-        return f"({' || '.join(self._value(a, context) for a in self.args)})"
+        return self.__sql_args__(context)
 
 
-class Raw(Expression):
-    def __init__(self, value: Any):
-        super().__init__()
-
-        if isinstance(value, Template):
-            self.args = [self._arg(a) for a in extract_template(value)]
-        else:
-            self.args = [self.from_python(value)]
-
-    def from_python(self, value: Any):
-        if isinstance(value, int):
-            self.sql_type = Types.BIGINT
-        elif isinstance(value, (float, Decimal)):
-            self.sql_type = Types.NUMERIC
-        elif isinstance(value, (datetime, date)):
-            self.sql_type = Types.TIMESTAMPTZ
-        elif isinstance(value, timedelta):
-            self.sql_type = Types.INTERVAL
-        elif isinstance(value, UUID):
-            self.sql_type = Types.UUID
-        elif isinstance(value, (list, dict)):
-            self.sql_type = Types.JSONB
-        else:
-            raise TypeError(f"Тип {type(value)} не поддерживается в Raw")
-        return value
-
-    def __sql__(self, context: QueryContext) -> str:
-        if type_ := self.sql_type or "":
-            type_ = f"::{type_}"
-        return f"({
-            ''.join(
-                self._value(a, context) if isinstance(a, Node) else str(a)
-                for a in self.args
-            )
-        }){type_}"
+class Coalesce(ScalarFunc):
+    name = "COALESCE"
 
 
-class Ref(Expression):
-    def __init__(self, reference: str):
-        super().__init__()
+class AtTimeZone(ScalarExpression):
+    def __init__(
+        self,
+        expression: Expression,
+        zone: str | Expression,
+    ):
+        super().__init__(sql_type=expression.sql_type)
 
-        self.reference = reference
-
-    def __sql__(self, context: QueryContext) -> str:
-        return quote_ident(self.reference)
-
-
-class Cast(WrappedNodeMixin, Expression):
-    def __init__(self, wrapped: Expression, to: str | Expression):
-        super().__init__(wrapped=wrapped, is_aggregate=wrapped.is_aggregate)
-
-        if isinstance(to, Expression):
-            self.sql_type = to.sql_type
-        else:
-            self.sql_type = to
-
-        self.to = to
+        self.expression, self.zone = self._arg(expression), self._arg(zone)
 
     def __sql__(self, context: QueryContext):
-        return f"({super().__sql__(context)})::{self.sql_type}"
-
-
-class AtTimeZone(WrappedNodeMixin, Expression):
-    def __init__(self, wrapped: Expression, zone: str | Expression):
-        super().__init__(wrapped=wrapped, is_aggregate=wrapped.is_aggregate)
-
-        self.zone = self._arg(zone)
-
-    def __sql__(self, context: QueryContext) -> str:
         return (
-            f"({super().__sql__(context)} "
+            f"({self.expression.__sql__(context)} "
             f"AT TIME ZONE {self._value(self.zone, context)})"
         )
 
 
-class Func(Expression):
+# --- Агрегаты ----
+
+
+class AggregateExpression(Expression):
+    def filter(self, condition: Expression) -> FilteredAggregate:
+        return FilteredAggregate(self, condition)
+
+    def over(
+        self,
+        partition_by: list[Expression] = None,
+        order_by: list[OrderBy] = None,
+    ) -> WindowExpression:
+        return WindowExpression(self, partition_by, order_by)
+
+
+class AggregateQ(AggregateExpression, Q):
+    pass
+
+
+class AggregateCoalesce(AggregateExpression, Coalesce):
+    pass
+
+
+class AggregateCast(AggregateExpression, Cast):
+    pass
+
+
+class AggregateAtTimeZone(AggregateExpression, AtTimeZone):
+    pass
+
+
+class AggregateFunc(FuncMixin, AggregateExpression):
     def __init__(
-        self, name: str, *args, sql_type: SqlType | None = None, is_aggregate=False
+        self,
+        *args: Any,
+        distinct: bool = False,
+        sql_type: T_SqlType = None,
     ):
-        super().__init__(sql_type=sql_type, is_aggregate=is_aggregate)
+        super().__init__(*args, sql_type=sql_type)
 
-        self.name = name.upper()
-        self.args = self._list_arg(args)
-        self.window: Window | None = None
+        self.distinct = distinct
 
-    def over(self, partition_by=None, order_by=None):
-        self.window = self._arg(Window(partition_by, order_by))
-        self.is_windowed = True
-        self.is_aggregate = False
+    def __sql__(self, context: QueryContext) -> str:
+        return self.__sql_args__(context, "DISTINCT " if self.distinct else "")
+
+
+class UnaryAggregate(AggregateFunc):
+    def __init__(
+        self, expression: Expression, distinct: bool = False, sql_type: T_SqlType = None
+    ):
+        super().__init__(expression, distinct=distinct, sql_type=sql_type)
+
+
+class FilteredAggregate(AggregateExpression):
+    def __init__(self, expression: AggregateExpression, condition: Expression):
+        super().__init__()
+
+        self.expression, self.condition = self._arg(expression), self._arg(condition)
+
+    def __sql__(self, context: QueryContext) -> str:
+        agg_sql = self.expression.__sql__(context)
+        cond_sql = self.condition.__sql__(context)
+        return f"{agg_sql} FILTER (WHERE {cond_sql})"
+
+
+class FrameMode(StrEnum):
+    ROWS = "ROWS"
+    RANGE = "RANGE"
+    GROUPS = "GROUPS"
+
+
+class FrameBound(StrEnum):
+    CURRENT = "CURRENT ROW"
+    START = "UNBOUNDED PRECEDING"
+    END = "UNBOUNDED FOLLOWING"
+
+
+class WindowExpression(ScalarExpression):
+    def __init__(
+        self,
+        expression: AggregateExpression,
+        partition_by: Expression | list[Expression] = None,
+        order_by: OrderBy | list[OrderBy] | Expression | list[Expression] = None,
+    ):
+        super().__init__(sql_type=expression.sql_type)
+
+        self.expression = self._arg(expression)
+        self.partition_by: list[Expression] = self._list_arg(partition_by)
+        self.order_by: list[Expression] = self._list_arg(order_by)
+        self._mode = FrameMode.ROWS
+        self._frame: (
+            tuple[
+                FrameMode,
+                int | Literal[FrameBound.START],
+                int | Literal[FrameBound.END, FrameBound.CURRENT],
+            ]
+            | None
+        ) = None
+
+    @property
+    def rows(self) -> Self:
+        self._mode = FrameMode.ROWS
         return self
 
-    def _render_args(self, context: QueryContext) -> str:
-        return ", ".join(self._value(arg, context) for arg in self.args)
+    @property
+    def range(self) -> Self:
+        self._mode = FrameMode.RANGE
+        return self
 
-    def __sql__(self, context: QueryContext) -> str:
-        sql = f"{self.name}({self._render_args(context)})"
-        if self.window:
-            sql = f"{sql} OVER ({self.window.__sql__(context)})"
-        return sql
-
-
-class WindowFunction(Expression):
-    def __init__(self, source: Aggregate, window: Window):
-        super().__init__(is_windowed=True, sql_type=source.sql_type)
-        self.source = self._arg(source)
-        self.window = self._arg(window)
-
-    def __sql__(self, context: QueryContext) -> str:
-        source_sql = self.source.__sql__(context)
-        filter_sql = (
-            self.source._render_filter(context)
-            if hasattr(self.source, "_render_filter")
-            else ""
+    def __getitem__(
+        self, item: slice[int | EllipsisType | None, int | EllipsisType | None]
+    ) -> Self:
+        start = FrameBound.START if item.start in (Ellipsis, None) else item.start
+        stop = (
+            FrameBound.END
+            if item.stop is Ellipsis
+            else (item.stop if item.stop is not None else FrameBound.CURRENT)
         )
-        window_sql = self.window.__sql__(context)
+        self._frame = (self._mode, start, stop)
+        return self
 
-        return f"{source_sql}{filter_sql} OVER ({window_sql})"
+    def __sql_bound__(self, bound: Any) -> str:
+        if isinstance(bound, int):
+            if bound == 0:
+                return str(FrameBound.CURRENT)
+            return f"{abs(bound)} PRECEDING" if bound > 0 else f"{abs(bound)} FOLLOWING"
+        return str(bound)
 
+    def __sql__(self, context: QueryContext) -> str:
+        agg_sql = self.expression.__sql__(context)
 
-def Coalesce(*args: Any, sql_type: SqlType | None = None):
-    return Func("COALESCE", *args, sql_type=sql_type)
+        parts = []
+
+        if self.partition_by:
+            parts.append(
+                f"PARTITION BY {
+                    (', '.join(p.__sql__(context) for p in self.partition_by))
+                }"
+            )
+
+        if self.order_by:
+            parts.append(
+                f"ORDER BY {
+                    (
+                        ', '.join(
+                            o.__sql__(context)
+                            if isinstance(o, OrderBy)
+                            else o.asc().__sql__(context)
+                            for o in self.order_by
+                        )
+                    )
+                }"
+            )
+
+        if self._frame:
+            mode, start, end = self._frame
+            parts.append(
+                f"{mode.value} BETWEEN {self.__sql_bound__(start)} "
+                f"AND {self.__sql_bound__(end)}"
+            )
+
+        spec_sql = f"({' '.join(parts)})" if parts else "()"
+        return f"{agg_sql} OVER {spec_sql}"

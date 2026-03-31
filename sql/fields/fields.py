@@ -1,9 +1,9 @@
 from typing import TYPE_CHECKING, Any
 
 from sql.core.expressions import Q
-from sql.core.functions import Age, Extract
 from sql.core.types import Types
 from sql.fields.base import Field
+from sql.functions import Age, Extract
 
 if TYPE_CHECKING:
     pass
