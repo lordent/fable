@@ -4,8 +4,14 @@ from typing import Any
 
 from sql.core.base import QueryContext
 from sql.core.converters import register_converter
-from sql.core.expressions import Expression, ScalarExpression
-from sql.core.functions import AggregateFunc, ScalarFunc, UnaryAggregate
+from sql.core.expressions import (
+    AggregateFunc,
+    Expression,
+    ScalarExpression,
+    ScalarFunc,
+    UnaryAggregate,
+)
+from sql.core.raw import Raw
 from sql.core.types import Types
 from sql.utils import extract_template
 
@@ -25,14 +31,19 @@ class Concat(Expression):
 
 
 class Sum(UnaryAggregate):
+    args: list[Expression]
+
     def __init__(self, expression: Expression, distinct: bool = False):
-        expression = self._arg(expression)
-        super().__init__(expression, distinct=distinct, sql_type=expression.sql_type)
+        super().__init__(expression, distinct=distinct)
+
+        self.sql_type = self.args[0].sql_type
 
 
 class Count(UnaryAggregate):
-    def __init__(self, expression: Any = "*", distinct: bool = False):
-        super().__init__(expression, distinct=distinct, sql_type=Types.BIGINT)
+    def __init__(self, expression: Any = None, distinct: bool = False):
+        super().__init__(
+            expression or Raw(t"*"), distinct=distinct, sql_type=Types.BIGINT
+        )
 
 
 class Avg(UnaryAggregate):
@@ -55,9 +66,9 @@ class RowNumber(AggregateFunc):
     name = "ROW_NUMBER"
 
     def __init__(self):
-        super().__init__("*", sql_type=Types.BIGINT)
+        super().__init__(Raw(t"*"), sql_type=Types.BIGINT)
 
-    def _render_args(self, context, prefix=""):
+    def __sql_args__(self, context, prefix=""):
         return f"{self.name}()"
 
 
@@ -130,3 +141,13 @@ class Now(ScalarFunc):
         args = [precision] if precision is not None else []
 
         super().__init__(*args)
+
+
+class Age(ScalarFunc):
+    sql_type = Types.INTERVAL
+
+    def __init__(self, source: Expression, relative_to: Expression = None):
+        if relative_to is None:
+            super().__init__(source)
+        else:
+            super().__init__(source, relative_to)

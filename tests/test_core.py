@@ -1,10 +1,14 @@
+import pytest
+
 from sql.core.base import (
     Node,
     OrderBy,
     OrderDirections,
     QueryContext,
-    register_converter,
 )
+from sql.core.converters import register_converter
+from sql.core.raw import Raw
+from tests.conftest import Users
 
 # --- МОКИ ДЛЯ ТЕСТОВ ---
 
@@ -110,3 +114,12 @@ def test_prepare_interface():
     assert len(res) == 2
     assert res[0] == "CAST($1 AS TEXT)"
     assert res[1] == "data"
+
+
+def test_injection():
+    danger_value = "(SELECT TRUNCATE 'users')"
+
+    with pytest.raises(TypeError) as excinfo:
+        Raw.Scalar(t"{Users.birth_date} + interval '{danger_value} day'")
+
+    assert "не поддерживается в Raw" in str(excinfo.value)

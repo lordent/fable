@@ -1,18 +1,20 @@
 from typing import Any, TypeVar
 
-from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
-from sql.core.expressions import Expression, ScalarExpression
+from sql.core.expressions import AggregateExpression, Expression, ScalarExpression
 
-T = TypeVar("T", bound="CaseBase")
+T = TypeVar("T", bound="Case")
 
 
-class CaseBase(Expression):
+class Case(Expression):
+    Scalar: type[ScalarCase]
+    Aggregate: type[AggregateCase]
+
     def __init__(self, default: Any = None):
         super().__init__()
 
-        self._cases: list[tuple[Node, Node]] = []
-        self._else: Node | None = self._arg(default) if default is not None else None
+        self._cases: list[tuple[Node, Any]] = []
+        self._else: Any | None = self._arg(default) if default is not None else None
 
         if isinstance(self._else, Expression):
             self.sql_type = self._else.sql_type
@@ -34,23 +36,24 @@ class CaseBase(Expression):
 
         parts = ["CASE"]
         for cond, res in self._cases:
-            parts.append(f"WHEN {cond.__sql__(context)} THEN {res.__sql__(context)}")
+            parts.append(
+                f"WHEN {cond.__sql__(context)} THEN {self._value(res, context)}"
+            )
 
         if self._else is not None:
-            parts.append(f"ELSE {self._else.__sql__(context)}")
+            parts.append(f"ELSE {self._value(self._else, context)}")
 
         parts.append("END")
         return f"({' '.join(parts)})"
 
 
-class ScalarCase(ScalarExpression, CaseBase):
+class ScalarCase(ScalarExpression, Case):
     pass
 
 
-class AggregateCase(AggregateExpression, CaseBase):
+class AggregateCase(AggregateExpression, Case):
     pass
 
 
-class Case:
-    Scalar = ScalarCase
-    Aggregate = AggregateCase
+Case.Scalar = ScalarCase
+Case.Aggregate = AggregateCase

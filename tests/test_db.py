@@ -1,23 +1,31 @@
 from decimal import Decimal
 
 import pytest
-from sql.queries.base import Query
+
+from sql.core.case import Case
+from sql.core.raw import Raw, Ref
+from sql.core.types import Types
+from sql.fields.fields import DecimalField
+from sql.functions import Avg, Count, RowNumber, Sum
 from sql.queries.select import Select
 from sql.queries.values import Item, List
-
-from sql.core.aggregates import Avg, Count, Sum
-from sql.core.case import Case
-from sql.core.expressions import Raw, Ref
-from sql.fields.fields import DecimalField
 
 from .conftest import Categories, Cities, Sales, Shops, Users
 
 
 @pytest.mark.asyncio
 async def test_select_users_integration():
-    users = await Select(Users.id, Users.name).order_by(Users.id)
+    query = Select(
+        Users.id,
+        Users.name,
+        Users.birth_date,
+        birth_date_tomorrow=Raw.Scalar(t"{Users.birth_date} + interval '{1} day'")
+        >> Types.DATE,
+    ).order_by(Users.id)
+    users = await query
     assert len(users) > 0
     assert users[0]["name"] == "Александр"
+    assert (users[0]["birth_date_tomorrow"] - users[0]["birth_date"]).days == 1
 
 
 @pytest.mark.asyncio
@@ -157,8 +165,7 @@ async def test_json_list_empty_coalesce():
         .limit(1)
     )
 
-    res = await query
-    if res:
+    if res := await query:
         assert res[0]["shops"] == []
 
 
@@ -174,9 +181,10 @@ async def test_join():
         )
         .join(Sales, strategy=Select.Join.RIGHT)
         .order_by(
-            Ref("sales_count").desc(),
+            Ref.Aggregate("sales_count").desc(),
         )
     )
+
     res = [dict(record) for record in await query]
     assert res == [
         {"name": "Гаджеты", "sales_count": 3, "total_revenue": Decimal("10000.00")},
@@ -222,14 +230,13 @@ async def test_union():
 
 @pytest.mark.asyncio
 async def test_recursive():
+
     with (
-        Select(Categories.id, Categories.name, level=Raw(0))
+        Select(Categories.id, Categories.name, level=Raw.Scalar(0))
         .filter(Categories.parent_id == None)
         .recursive() as Tree
     ):
-        Tree &= Select(Categories.id, Categories.name, level=Tree.level + 1).join(
-            Tree, on=Categories.parent_id == Tree.id
-        )
+        Tree &= Select(Categories.id, Categories.name, level=Tree.level + 1).join(Tree)
 
     query = Select(*Tree).order_by(Tree.id.asc())
 
@@ -275,23 +282,70 @@ async def test_case():
     ]
 
 
-def test_analyze_plan_logic():
-    q = Query()
+@pytest.mark.asyncio
+async def test_having_with_expression_dependency():
+    query = (
+        Select(Users.name, total=Sum(Sales.amount))
+        .filter(Sum(Sales.amount) > (Users.id * 1000))
+        .group_by(Users.id)
+        .order_by(Users.name)
+    )
 
-    bad_plan = {
-        "Plan": {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 500,
-            "Plan Rows": 5,
-            "Plans": [
-                {
-                    "Node Type": "Sort",
-                    "Sort Method": "external merge",
-                    "Actual Rows": 100,
-                }
-            ],
-        }
-    }
+    res = await query
+    assert len(res) > 0
+    assert any(r["name"] == "Александр" for r in res)
 
-    q._analyze_plan("SELECT * FROM users", bad_plan)
+
+@pytest.mark.asyncio
+async def test_window_functions_integration():
+    running_sum = Sum(Sales.amount).over(
+        partition_by=Sales.shop_id,
+        order_by=Sales.id,
+    )[1:0]
+
+    query = Select(Sales.id, Sales.amount, two_rows_sum=running_sum).order_by(
+        Sales.shop_id, Sales.id
+    )
+
+    res = await query
+
+    assert len(res) > 0
+
+    row1 = next(r for r in res if r["id"] == 1)
+    row2 = next(r for r in res if r["id"] == 2)
+
+    assert row1["two_rows_sum"] == 5000
+    assert row2["two_rows_sum"] == 7000
+
+
+@pytest.mark.asyncio
+async def test_row_number_simple():
+    rn = RowNumber().over(order_by=Sales.amount.desc())
+    query = Select(Sales.id, position=rn).limit(1)
+    res = await query
+
+    assert res[0]["position"] == 1
+
+
+@pytest.mark.asyncio
+async def test_window_following_slice():
+    next_diff = Sum(Sales.amount).over(order_by=Sales.id)[0:-1]
+    query = Select(Sales.id, Sales.amount, pair_sum=next_diff).order_by(Sales.id)
+    assert [dict(record) for record in await query] == [
+        {"id": 1, "amount": Decimal("5000.00"), "pair_sum": Decimal("7000.00")},
+        {"id": 2, "amount": Decimal("2000.00"), "pair_sum": Decimal("3500.00")},
+        {"id": 3, "amount": Decimal("1500.00"), "pair_sum": Decimal("4500.00")},
+        {"id": 4, "amount": Decimal("3000.00"), "pair_sum": Decimal("3000.00")},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_window_range_mode():
+    window = Sum(Sales.amount).over(order_by=Sales.amount).range[...:0]
+    query = Select(Sales.id, Sales.amount, range_sum=window).order_by(Sales.amount)
+    sql = str(query)
+
+    assert "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" in sql
+
+    res = await query
+    assert len(res) > 0

@@ -4,14 +4,16 @@ from string.templatelib import Template
 from typing import Any
 from uuid import UUID
 
-from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
-from sql.core.expressions import Expression, ScalarExpression
+from sql.core.expressions import AggregateExpression, Expression, ScalarExpression
 from sql.core.types import Types
 from sql.utils import extract_template, quote_ident
 
 
-class _Ref(Expression):
+class Ref(Expression):
+    Scalar: type[ScalarRef]
+    Aggregate: type[AggregateRef]
+
     def __init__(self, reference: str):
         super().__init__()
 
@@ -21,26 +23,52 @@ class _Ref(Expression):
         return quote_ident(self.reference)
 
 
-class Ref:
-    class Scalar(ScalarExpression, _Ref):
-        pass
-
-    class Aggregate(AggregateExpression, _Ref):
-        pass
+class ScalarRef(ScalarExpression, Ref):
+    pass
 
 
-class _Raw(Expression):
-    # TODO: проработать шаблоны с аргументами
+class AggregateRef(AggregateExpression, Ref):
+    pass
+
+
+Ref.Scalar = ScalarRef
+Ref.Aggregate = AggregateRef
+
+ACCEPT_TYPES = (
+    Node,
+    int,
+    float,
+    Decimal,
+    datetime,
+    date,
+    timedelta,
+    UUID,
+    list,
+    dict,
+)
+
+
+class Raw(Expression):
+    Scalar: type[ScalarRaw]
+    Aggregate: type[AggregateRaw]
 
     def __init__(self, value: Any):
         super().__init__()
 
         if isinstance(value, Template):
-            self.args = [self._arg(a) for a in extract_template(value)]
+            self.args = [
+                self._arg(a) for a in extract_template(value, validator=self.validator)
+            ]
         else:
             self.args = [self.from_python(value)]
 
+    def validator(self, value: Any):
+        if isinstance(value, ACCEPT_TYPES):
+            return value
+        raise TypeError(f"Тип {type(value)} не поддерживается в Raw")
+
     def from_python(self, value: Any):
+
         if isinstance(value, int):
             self.sql_type = Types.BIGINT
         elif isinstance(value, (float, Decimal)):
@@ -68,9 +96,13 @@ class _Raw(Expression):
         }){type_}"
 
 
-class Raw:
-    class Scalar(ScalarExpression, _Raw):
-        pass
+class ScalarRaw(ScalarExpression, Raw):
+    pass
 
-    class Aggregate(AggregateExpression, _Raw):
-        pass
+
+class AggregateRaw(AggregateExpression, Raw):
+    pass
+
+
+Raw.Scalar = ScalarRaw
+Raw.Aggregate = AggregateRaw

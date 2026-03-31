@@ -5,6 +5,7 @@ import logging
 from typing import TypeVar
 
 import asyncpg
+
 from sql.app import Application
 from sql.queries.values import ValuesNodeMixin
 

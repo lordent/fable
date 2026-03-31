@@ -6,6 +6,8 @@ from sql.core.converters import get_converter
 if TYPE_CHECKING:
     from sql.models import Model
 
+COLLECTION_TYPES = list, tuple, set
+
 
 class QueryContext:
     __slots__ = "params", "level"
@@ -44,7 +46,7 @@ class Node:
     def _list_arg(self, value: Any) -> list[Node]:
         if value is None:
             return []
-        if isinstance(value, (list, tuple, set)):
+        if isinstance(value, COLLECTION_TYPES):
             return [self._arg(a) for a in value]
         return [self._arg(value)]
 

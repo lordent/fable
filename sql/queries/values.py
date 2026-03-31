@@ -1,12 +1,11 @@
 from typing import Any
 
-from sql.core.expressions import Expression
-from sql.core.typings import typewith
-from sql.fields.base import Field
-from sql.utils import quote_literal
-
 from sql.core.base import Node, QueryContext
+from sql.core.expressions import AggregateExpression, ScalarExpression
 from sql.core.types import Types
+from sql.fields.base import Field
+from sql.typings import typewith
+from sql.utils import quote_literal
 
 
 class ValuesNodeMixin(typewith(Node)):
@@ -14,9 +13,16 @@ class ValuesNodeMixin(typewith(Node)):
         super().__init__()
 
         self._values: dict[str, Any] = {}
+        self._has_aggregate = False
 
         if args or kwargs:
             self.values(*args, **kwargs)
+
+    def _arg(self, value: Any):
+        value = super()._arg(value)
+        if isinstance(value, AggregateExpression):
+            self._has_aggregate = True
+        return value
 
     def values(self, *args: Field, **kwargs: Any):
         for f in args:
@@ -31,7 +37,7 @@ class ValuesNodeMixin(typewith(Node)):
         return self
 
 
-class Item(ValuesNodeMixin, Expression):
+class Item(ValuesNodeMixin, ScalarExpression):
     sql_type = Types.JSONB
 
     def _json_build_recursive(self, fields: dict, context: QueryContext):
@@ -45,12 +51,6 @@ class Item(ValuesNodeMixin, Expression):
         return self._json_build_recursive(self._values, context)
 
 
-class List(Item):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.is_aggregate = True
-
+class List(AggregateExpression, Item):
     def __sql__(self, context: QueryContext):
-        inner_json = super().__sql__(context)
-        return f"COALESCE(JSONB_AGG({inner_json}), '[]'::jsonb)"
+        return f"COALESCE(JSONB_AGG({super().__sql__(context)}), '[]'::jsonb)"

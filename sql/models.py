@@ -64,13 +64,13 @@ class QueryModelMeta(ModelMeta):
 
 
 class RecursiveModelMeta(QueryModelMeta):
-    def __iand__(cls: type[RecursiveModel], other: ValuesQuery):
+    def __iand__(cls: type[RecursiveModel], other: ValuesQuery) -> type[RecursiveModel]:
         return cls << (cls._source & other)
 
-    def __ior__(cls: type[RecursiveModel], other: ValuesQuery):
+    def __ior__(cls: type[RecursiveModel], other: ValuesQuery) -> type[RecursiveModel]:
         return cls << (cls._source | other)
 
-    def __lshift__(cls: type[RecursiveModel], other: Node):
+    def __lshift__(cls: type[RecursiveModel], other: Node) -> type[RecursiveModel]:
         cls._source = other
         return cls
 
@@ -143,6 +143,8 @@ class QueryModel(Model, metaclass=QueryModelMeta):
         cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
         for name, value in source._values.items():
             if isinstance(value, Field):
+                if value.primary:
+                    value = ForeignField(to=value.model)
                 value.bind(cls, name)
             else:
                 Field(

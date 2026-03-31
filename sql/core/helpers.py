@@ -1,8 +1,8 @@
 from typing import Any, overload
 
-from sql.core.aggregates import AggregateExpression
 from sql.core.expressions import (
     AggregateCoalesce,
+    AggregateExpression,
     Coalesce,
     Expression,
     ScalarExpression,
