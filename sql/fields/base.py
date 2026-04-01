@@ -48,7 +48,8 @@ class Field(ScalarExpression, metaclass=FieldMeta):
 
     def bind(self, owner: type[Model] = None, name: str = None) -> Self:
         args, kwargs = deepcopy(self._blueprint)
-        instance = type(self)(*args, **kwargs)
+        instance: Self = type.__call__(self.__class__, *args, **kwargs)
+        instance._blueprint = self._blueprint
         if owner and name:
             setattr(owner, name, instance)
             instance.__set_name__(owner, name)

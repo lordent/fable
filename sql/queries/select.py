@@ -10,7 +10,7 @@ from sql.queries.base import RecursiveContext, ValuesQuery
 from sql.utils import quote_ident
 
 from ..core.base import OrderBy, QueryContext
-from ..models import Model, RecursiveModel, TableModel
+from ..models import RecursiveModel, T_Model, TableModel
 from .values import Item, List
 
 
@@ -28,7 +28,7 @@ class LockMode(StrEnum):
 
 class LockDict(TypedDict):
     mode: LockMode
-    of: set[type[Model]]
+    of: set[T_Model]
     nowait: bool
     skip_locked: bool
 
@@ -57,7 +57,7 @@ class Select(ValuesQuery):
     Lock = LockMode
 
     def __init__(self, *args: Field, **kwargs: Any):
-        self._joins: dict[type[Model], JoinDict] = {}
+        self._joins: dict[T_Model, JoinDict] = {}
         self._where: Q | None = None
         self._having: Q | None = None
         self._order_by: list[OrderBy] = []
@@ -72,7 +72,7 @@ class Select(ValuesQuery):
     def _set_lock(
         self,
         mode: LockMode,
-        of: tuple[type[Model], ...],
+        of: tuple[T_Model, ...],
         nowait: bool,
         skip_locked: bool,
     ) -> Self:
@@ -89,12 +89,12 @@ class Select(ValuesQuery):
         return RecursiveContext(self)
 
     def for_update(
-        self, *of: type[Model], nowait: bool = False, skip_locked: bool = False
+        self, *of: T_Model, nowait: bool = False, skip_locked: bool = False
     ) -> Self:
         return self._set_lock(LockMode.UPDATE, of, nowait, skip_locked)
 
     def for_share(
-        self, *of: type[Model], nowait: bool = False, skip_locked: bool = False
+        self, *of: T_Model, nowait: bool = False, skip_locked: bool = False
     ) -> Self:
         return self._set_lock(LockMode.SHARE, of, nowait, skip_locked)
 
@@ -113,7 +113,7 @@ class Select(ValuesQuery):
                 self._where = (self._where & a) if self._where else a
         return self
 
-    def _auto_join(self, target: type[Model]):
+    def _auto_join(self, target: T_Model):
         for field in target._foreign_fields.values():
             if (to := field.to) in self.relations and to != target:
                 if field.name == to.id.name and to == to.id.model:
@@ -132,7 +132,7 @@ class Select(ValuesQuery):
 
     def join(
         self,
-        target: type[Model],
+        target: T_Model,
         on: Q | None = None,
         strategy: JoinStrategy = JoinStrategy.LEFT,
     ) -> Self:
@@ -190,11 +190,11 @@ class Select(ValuesQuery):
         sql = []
 
         if not context.level and (
-            recursives := [m for m in self.relations if issubclass(m, RecursiveModel)]
+            recursives := [m for m in self.relations if isinstance(m, RecursiveModel)]
         ):
             cte_context = context.sub()
-            ctes = ", ".join(m.__sql__(cte_context) for m in recursives)
-            sql.append(f"WITH RECURSIVE {ctes}")
+            sql_ = ", ".join(m.__sql__(cte_context) for m in recursives)
+            sql.append(f"WITH RECURSIVE {sql_}")
 
         sql.append(f"SELECT {', '.join(cols)}")
 
@@ -206,7 +206,7 @@ class Select(ValuesQuery):
                     ', '.join(
                         (
                             m.__sql_alias__(context)
-                            if issubclass(m, RecursiveModel)
+                            if isinstance(m, RecursiveModel)
                             else m.__sql__(context)
                         )
                         for m in main_models
@@ -216,13 +216,13 @@ class Select(ValuesQuery):
 
         for m, join_data in self._joins.items():
             strategy = join_data["strategy"].value
-            on_sql = join_data["on"].__sql__(context)
+            sql_ = join_data["on"].__sql__(context)
             target_sql = (
                 m.__sql_alias__(context)
-                if issubclass(m, RecursiveModel)
+                if isinstance(m, RecursiveModel)
                 else m.__sql__(context)
             )
-            sql.append(f"{strategy} {target_sql} ON {on_sql}")
+            sql.append(f"{strategy} {target_sql} ON {sql_}")
 
         if self._where:
             sql.append(f"WHERE {self._where.__sql__(context)}")
