@@ -4,43 +4,46 @@ services:
     container_name: sql_builder_db
     restart: always
     environment:
-      # Настройки для создания БД
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: sql_builder
-      # Настройки для работы psql внутри этого контейнера
       PGUSER: user
       PGPASSWORD: password
       PGDATABASE: sql_builder
     ports:
       - "5432:5432"
+    shm_size: '256mb' # Важно для сложных Window Functions и Join в Fable
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready" ]
+      test: [ "CMD-SHELL", "pg_isready -U user -d sql_builder" ]
       interval: 5s
       timeout: 5s
       retries: 5
 
   web:
-    user: "${UID}:${GID}"
-    build: .
+    build:
+      context: .
+      args:
+        # Передаем ID твоего юзера с хоста в контейнер
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
     container_name: sql_builder
+    # Включаем TTY для удобной работы в терминале
+    stdin_open: true
+    tty: true
     ports:
       - "8000:8000"
     volumes:
       - .:/app
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/sql_builder
-      - PYTHONUNBUFFERED=1
-      # Эти переменные позволят запускать psql из контейнера с кодом
       - PGHOST=db
       - PGUSER=user
       - PGPASSWORD=password
       - PGDATABASE=sql_builder
-      # Прокси для обхода 403 при сборке
-      - http_proxy=${HTTP_PROXY}
-      - https_proxy=${HTTPS_PROXY}
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
     depends_on:
       db:
         condition: service_healthy

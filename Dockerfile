@@ -1,19 +1,29 @@
-# Используем текущую стабильную версию 3.14
 FROM python:3.14-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    gcc \
+    libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UID=1000
+ARG GID=1000
+
+RUN groupadd -g $GID vscode || true && \
+    useradd -l -u $UID -g $GID -m -s /bin/bash vscode || true
+
+USER vscode
+
+ENV PATH="/home/vscode/.local/bin:${PATH}"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-WORKDIR /app
+COPY --chown=vscode:vscode requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --user ruff
 
-# Зависимости для FastAPI и работы с t-strings
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install ruff
-
-COPY . .
+COPY --chown=vscode:vscode . .
 
 EXPOSE 8000
 
-# CMD ["fastapi", "dev", "main.py", "--host", "0.0.0.0", "--port", "8000"]
 CMD ["tail", "-f", "/dev/null"]
