@@ -1,29 +1,21 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Any, Self, TypedDict
 
-from sql.core.expressions import AggregateExpression, Expression, Q, WindowExpression
+from sql.core.aggregates import AggregateExpression, WindowExpression
+from sql.core.enums import GroupMode, JoinStrategy, LockMode
+from sql.core.expressions import Expression
+from sql.core.order import OrderBy
 from sql.core.raw import Ref
+from sql.core.scalars import Q
+from sql.core.types import T_Model
 from sql.fields.base import Field
 from sql.queries.base import RecursiveContext, ValuesQuery
 from sql.utils import quote_ident
 
-from ..core.base import OrderBy, QueryContext
-from ..models import RecursiveModel, T_Model, TableModel
+from ..core.base import QueryContext
+from ..models import RecursiveModel, TableModel
 from .values import Item, List
-
-
-class JoinStrategy(StrEnum):
-    LEFT = "JOIN"
-    INNER = "INNER JOIN"
-    RIGHT = "RIGHT JOIN"
-    FULL = "FULL OUTER JOIN"
-
-
-class LockMode(StrEnum):
-    UPDATE = "FOR UPDATE"
-    SHARE = "FOR SHARE"
 
 
 class LockDict(TypedDict):
@@ -31,12 +23,6 @@ class LockDict(TypedDict):
     of: set[T_Model]
     nowait: bool
     skip_locked: bool
-
-
-class GroupMode(StrEnum):
-    ROLLUP = "ROLLUP"
-    CUBE = "CUBE"
-    SETS = "GROUPING SETS"
 
 
 class SummaryDict(TypedDict):

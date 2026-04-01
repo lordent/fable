@@ -12,7 +12,7 @@ services:
       PGDATABASE: sql_builder
     ports:
       - "5432:5432"
-    shm_size: '256mb' # Важно для сложных Window Functions и Join в Fable
+    shm_size: '256mb'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,11 +25,9 @@ services:
     build:
       context: .
       args:
-        # Передаем ID твоего юзера с хоста в контейнер
         UID: ${UID:-1000}
         GID: ${GID:-1000}
     container_name: sql_builder
-    # Включаем TTY для удобной работы в терминале
     stdin_open: true
     tty: true
     ports:

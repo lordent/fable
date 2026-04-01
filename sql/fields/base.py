@@ -5,7 +5,8 @@ from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, TypeVar
 
 from sql.core.base import QueryContext
-from sql.core.expressions import Expression, Q, ScalarExpression
+from sql.core.expressions import Expression
+from sql.core.scalars import Q, ScalarExpression
 from sql.core.types import SqlType, Types
 from sql.functions import Concat
 from sql.utils import quote_ident

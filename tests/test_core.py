@@ -2,11 +2,11 @@ import pytest
 
 from sql.core.base import (
     Node,
-    OrderBy,
-    OrderDirections,
     QueryContext,
 )
 from sql.core.converters import register_converter
+from sql.core.enums import OrderDirections
+from sql.core.order import OrderBy
 from sql.core.raw import Raw
 from tests.conftest import Users
 
@@ -39,13 +39,6 @@ class CustomNode(Node):
 # --- ТЕСТ-ПЛАН ---
 
 
-def test_node_initialization():
-    node = Node()
-    assert isinstance(node.relations, set)
-    assert len(node.relations) == 0
-    assert node.isolated is False
-
-
 def test_relations_propagation():
     m1, m2 = MockModel("Users"), MockModel("Sales")
 
@@ -60,19 +53,6 @@ def test_relations_propagation():
     assert m1 in parent.relations
     assert m2 in parent.relations
     assert len(parent.relations) == 2
-
-
-def test_isolated_node_behavior():
-    m = MockModel("Secret")
-
-    child = Node()
-    child.isolated = True
-    child.relations.add(m)
-
-    parent = Node()
-    parent._arg(child)
-
-    assert m not in parent.relations
 
 
 def test_custom_converter_logic():

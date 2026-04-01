@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from sql.queries.base import ValuesQuery
 
 M = TypeVar("M", bound="Model")
-type T_Model = type["Model"] | "ProxyModel"
 
 
 class ModelMeta(type):
@@ -79,11 +78,11 @@ class ProxyModel:
     def _bind_app(self):
         self._app = self._source._app
 
-    def __getitem__(self, alias: str):
-        return self._source.as_alias(alias)
-
     def __sql__(self, context: QueryContext):
-        return f"{quote_ident(self._source._source)} AS {quote_ident(context.get_alias(self))}"
+        return (
+            f"{quote_ident(self._source._source)} "
+            f"AS {quote_ident(context.get_alias(self))}"
+        )
 
     def __sql_alias__(self, context: QueryContext):
         base_alias = self._alias
@@ -106,20 +105,20 @@ class QueryModel(ProxyModel):
         super().__init__(source, alias=alias or f"sub{id(source)}")
 
     def _bind_fields(self):
-        for name, value in self._source._values.items():
-            if isinstance(value, Field):
-                if value.primary:
-                    value = ForeignField(to=value.model)
-                value.bind(self, name)
+        for name, field in self._source._values.items():
+            if isinstance(field, Field):
+                if field.primary:
+                    field = ForeignField(to=field.model)
             else:
-                Field(
+                field = Field(
                     sql_type=(
-                        value.sql_type if isinstance(value, Expression) else None
+                        field.sql_type if isinstance(field, Expression) else None
                     ),
-                ).bind(self, name)
+                )
+            field.bind(self, name)
 
     def _bind_app(self):
-        self._app = next(iter(self._source.relations), Model)._app
+        self._app = self._source.app
 
     def __getitem__(self, alias: str):
         return self.__class__(alias)

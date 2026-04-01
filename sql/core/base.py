@@ -1,10 +1,7 @@
-from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sql.core.converters import get_converter
-
-if TYPE_CHECKING:
-    from sql.models import T_Model
+from sql.core.types import QueryType, T_Model
 
 COLLECTION_TYPES = list, tuple, set
 
@@ -29,7 +26,6 @@ class QueryContext:
 
 class Node:
     relations: set[T_Model]
-    isolated: bool = False
 
     def __init__(self):
         self.relations = set()
@@ -38,7 +34,7 @@ class Node:
         if converter := get_converter(type(value)):
             value: Node = converter(value)
 
-        if isinstance(value, Node) and not value.isolated:
+        if isinstance(value, Node) and not isinstance(value, QueryType):
             self.relations |= value.relations
 
         return value
@@ -69,39 +65,3 @@ class Node:
 
     def __str__(self):
         return self.__sql__(QueryContext())
-
-
-class WrappedNodeMixin(Node):
-    def __init__(self, wrapped: Node, **kwargs):
-        super().__init__(**kwargs)
-
-        self.wrapped: Node = self._arg(wrapped)
-
-    def __sql__(self, context: QueryContext):
-        return f"{self.wrapped.__sql__(context)}"
-
-
-class OrderDirections(StrEnum):
-    DESC = "DESC"
-    ASC = "ASC"
-
-
-class OrderBy(WrappedNodeMixin, Node):
-    Direction = OrderDirections
-
-    def __init__(
-        self, wrapped: Node, direction: OrderDirections, nulls_first: bool = None
-    ):
-        super().__init__(wrapped=wrapped)
-
-        self.direction, self.nulls_first = direction, nulls_first
-
-    def __sql__(self, context: QueryContext):
-        sql = f"{super().__sql__(context)} {self.direction.value}"
-
-        if self.nulls_first is True:
-            sql += " NULLS FIRST"
-        elif self.nulls_first is False:
-            sql += " NULLS LAST"
-
-        return sql

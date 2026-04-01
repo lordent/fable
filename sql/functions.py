@@ -1,17 +1,13 @@
-from enum import StrEnum
 from string.templatelib import Template
 from typing import Any
 
+from sql.core.aggregates import AggregateFunc, UnaryAggregate
 from sql.core.base import QueryContext
 from sql.core.converters import register_converter
-from sql.core.expressions import (
-    AggregateFunc,
-    Expression,
-    ScalarExpression,
-    ScalarFunc,
-    UnaryAggregate,
-)
+from sql.core.enums import DatePart
+from sql.core.expressions import Expression
 from sql.core.raw import Raw
+from sql.core.scalars import ScalarExpression, ScalarFunc
 from sql.core.types import Types
 from sql.utils import extract_template
 
@@ -86,20 +82,6 @@ class Rank(AggregateFunc):
 
 class DenseRank(AggregateFunc):
     name = "DENSE_RANK"
-
-
-class DatePart(StrEnum):
-    YEAR = "YEAR"
-    MONTH = "MONTH"
-    DAY = "DAY"
-    HOUR = "HOUR"
-    MINUTE = "MINUTE"
-    SECOND = "SECOND"
-    WEEK = "WEEK"
-    QUARTER = "QUARTER"
-    EPOCH = "EPOCH"
-    DOW = "DOW"
-    DOY = "DOY"
 
 
 class Extract(ScalarExpression):

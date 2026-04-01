@@ -1,12 +1,12 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
-from sql.core.expressions import Q
 from sql.core.types import Types
 from sql.fields.base import Field
 from sql.functions import Age, Extract
 
 if TYPE_CHECKING:
-    pass
+    from sql.core.aggregates import AggregateExpression, AggregateQ
+    from sql.core.scalars import Q, ScalarExpression
 
 
 class ArrayField[F: "Field"](Field):
@@ -73,7 +73,15 @@ class TextField(Field):
 
         self.similarity_threshold = similarity_threshold
 
-    def similar(self, other: Any, threshold: float | None = None) -> Q:
+    @overload
+    def similar(
+        self, other: AggregateExpression, threshold: float | None = None
+    ) -> AggregateQ: ...
+
+    @overload
+    def similar(self, other: ScalarExpression, threshold: float | None = None) -> Q: ...
+
+    def similar(self, other: Any, threshold: float | None = None):
         return self.dist(other) < (threshold or self.similarity_threshold)
 
 

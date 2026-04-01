@@ -1,7 +1,10 @@
 from typing import Any, TypeVar
 
+from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
-from sql.core.expressions import AggregateExpression, Expression, ScalarExpression
+from sql.core.expressions import Expression
+from sql.core.scalars import ScalarExpression
+from sql.core.types import AggregateType, ScalarType
 
 T = TypeVar("T", bound="Case")
 
@@ -55,5 +58,5 @@ class AggregateCase(AggregateExpression, Case):
     pass
 
 
-Case.Scalar = ScalarCase
-Case.Aggregate = AggregateCase
+ScalarType.Case = Case.Scalar = ScalarCase
+AggregateType.Case = Case.Aggregate = AggregateCase

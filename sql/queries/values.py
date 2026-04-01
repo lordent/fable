@@ -1,7 +1,8 @@
 from typing import Any
 
+from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
-from sql.core.expressions import AggregateExpression, ScalarExpression
+from sql.core.scalars import ScalarExpression
 from sql.core.types import Types
 from sql.fields.base import Field
 from sql.typings import typewith

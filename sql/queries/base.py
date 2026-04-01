@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import asyncpg
 
 from sql.app import Application
+from sql.core.types import QueryType
 from sql.queries.values import ValuesNodeMixin
 
 from ..core.base import Node, QueryContext
@@ -15,7 +17,23 @@ from ..models import QueryModel, RecursiveModel
 logger = logging.getLogger("sql_builder.analyzer")
 
 
-class Query(Node):
+class Query(QueryType, Node):
+    app: Application = None
+
+    def _arg(self, value: Any):
+        value = super()._arg(value)
+
+        if not self.app:
+            if isinstance(value, Query):
+                self.app = value.app
+            elif isinstance(value, Node):
+                self.app = next(
+                    (app for m in value.relations if (app := m._app)),
+                    None,
+                )
+
+        return value
+
     async def _get_connection(self, app_name: str) -> tuple[asyncpg.Connection, bool]:
         conn = get_session(app_name)
         if conn:
@@ -26,15 +44,7 @@ class Query(Node):
         return self.execute().__await__()
 
     async def execute(self) -> list[asyncpg.Record]:
-        app: Application = next(
-            (
-                getattr(m, "_app", None)
-                for m in self.relations
-                if getattr(m, "_app", None)
-            ),
-            None,
-        )
-
+        app = self.app
         if not app:
             raise RuntimeError(f"Application не найден для {self.relations}")
 
@@ -137,8 +147,6 @@ class ValuesQuery(ValuesNodeMixin, Query):
 
 
 class Union(ValuesQuery):
-    isolated = True
-
     def __init__(self, *queries: ValuesQuery, all: bool = False):
         super().__init__()
 

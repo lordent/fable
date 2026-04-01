@@ -1,13 +1,15 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from string.templatelib import Template
 from typing import Any
 from uuid import UUID
 
+from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
-from sql.core.expressions import AggregateExpression, Expression, ScalarExpression
-from sql.core.types import Types
-from sql.utils import extract_template, quote_ident
+from sql.core.expressions import Expression
+from sql.core.scalars import ScalarExpression
+from sql.core.types import AggregateType, ScalarType, Types
+from sql.utils import extract_template, quote_ident, quote_literal
 
 
 class Ref(Expression):
@@ -31,21 +33,8 @@ class AggregateRef(AggregateExpression, Ref):
     pass
 
 
-Ref.Scalar = ScalarRef
-Ref.Aggregate = AggregateRef
-
-ACCEPT_TYPES = (
-    Node,
-    int,
-    float,
-    Decimal,
-    datetime,
-    date,
-    timedelta,
-    UUID,
-    list,
-    dict,
-)
+ScalarType.Ref = Ref.Scalar = ScalarRef
+AggregateType.Ref = Ref.Aggregate = AggregateRef
 
 
 class Raw(Expression):
@@ -60,40 +49,28 @@ class Raw(Expression):
                 self._arg(a) for a in extract_template(value, validator=self.validator)
             ]
         else:
-            self.args = [self.from_python(value)]
+            self.args = [self.validator(value)]
 
     def validator(self, value: Any):
-        if isinstance(value, ACCEPT_TYPES):
+        if isinstance(value, Node):
             return value
-        raise TypeError(f"Тип {type(value)} не поддерживается в Raw")
 
-    def from_python(self, value: Any):
-
-        if isinstance(value, int):
-            self.sql_type = Types.BIGINT
-        elif isinstance(value, (float, Decimal)):
-            self.sql_type = Types.NUMERIC
-        elif isinstance(value, (datetime, date)):
-            self.sql_type = Types.TIMESTAMPTZ
-        elif isinstance(value, timedelta):
-            self.sql_type = Types.INTERVAL
+        if isinstance(value, datetime | date):
+            value = f"{quote_literal(value.isoformat())}::{Types.TIMESTAMPTZ}"
         elif isinstance(value, UUID):
-            self.sql_type = Types.UUID
-        elif isinstance(value, (list, dict)):
-            self.sql_type = Types.JSONB
-        else:
+            value = f"{quote_literal(value.hex)}::{Types.UUID}"
+        elif not isinstance(value, int | float | Decimal):
             raise TypeError(f"Тип {type(value)} не поддерживается в Raw")
+
         return value
 
     def __sql__(self, context: QueryContext) -> str:
-        if type_ := self.sql_type or "":
-            type_ = f"::{type_}"
         return f"({
             ''.join(
                 self._value(a, context) if isinstance(a, Node) else str(a)
                 for a in self.args
             )
-        }){type_}"
+        })"
 
 
 class ScalarRaw(ScalarExpression, Raw):
@@ -104,5 +81,5 @@ class AggregateRaw(AggregateExpression, Raw):
     pass
 
 
-Raw.Scalar = ScalarRaw
-Raw.Aggregate = AggregateRaw
+ScalarType.Raw = Raw.Scalar = ScalarRaw
+AggregateType.Raw = Raw.Aggregate = AggregateRaw

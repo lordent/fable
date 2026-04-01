@@ -1,4 +1,6 @@
+import datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
@@ -19,13 +21,29 @@ async def test_select_users_integration():
         Users.id,
         Users.name,
         Users.birth_date,
-        birth_date_tomorrow=Raw.Scalar(t"{Users.birth_date} + interval '{1} day'")
+        birth_date_tomorrow=Raw.Scalar(t"{Users.birth_date} + INTERVAL '{1} day'")
         >> Types.DATE,
     ).order_by(Users.id)
     users = await query
     assert len(users) > 0
     assert users[0]["name"] == "Александр"
     assert (users[0]["birth_date_tomorrow"] - users[0]["birth_date"]).days == 1
+
+    now = datetime.datetime.now(datetime.UTC)
+    public_id = uuid4()
+
+    query = Select(
+        Sales.amount,
+        increase_amount=Raw.Scalar(t"{Sales.amount} + {Decimal('100')} + {100.20}"),
+        now=Raw.Scalar(t"{now} + INTERVAL '{1} day'"),
+        public_id=Raw.Scalar(t"{public_id}"),
+    ).order_by(Sales.id)
+    for row in await query:
+        assert (
+            row["amount"] + Decimal("100") + Decimal("100.20") == row["increase_amount"]
+        )
+        assert (row["now"] - now).days == 1
+        assert row["public_id"] == public_id
 
 
 @pytest.mark.asyncio
