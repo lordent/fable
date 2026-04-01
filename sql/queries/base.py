@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TypeVar
 
 import asyncpg
 
@@ -11,11 +10,9 @@ from sql.queries.values import ValuesNodeMixin
 
 from ..core.base import Node, QueryContext
 from ..db import Engine, get_session
-from ..models import Model, QueryModel, RecursiveModel
+from ..models import QueryModel, RecursiveModel
 
 logger = logging.getLogger("sql_builder.analyzer")
-
-T = TypeVar("T", bound="Model")
 
 
 class Query(Node):
@@ -130,7 +127,7 @@ class Query(Node):
 
 class ValuesQuery(ValuesNodeMixin, Query):
     def as_model(self, base_model: type[QueryModel] = QueryModel):
-        return base_model.factory(self)
+        return base_model(self)
 
     def __or__(self: ValuesQuery, other: ValuesQuery) -> Union:
         return Union(self, other, all=False)
@@ -160,14 +157,10 @@ class Union(ValuesQuery):
 class RecursiveContext:
     def __init__(self, base_query: ValuesQuery):
         self.base_query = base_query
-        self.tree_model = RecursiveModel.factory(base_query)
+        self.tree_model = RecursiveModel(base_query)
 
     def __enter__(self):
         return self.tree_model
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self.tree_model._source:
-            raise ValueError(
-                "Вы забыли наполнить рекурсию: ModelName << (base & recur)"
-            )
         return False

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from sql.queries.base import ValuesQuery
 
 M = TypeVar("M", bound="Model")
+type T_Model = type["Model"] | "ProxyModel"
 
 
 class ModelMeta(type):
@@ -31,9 +32,9 @@ class ModelMeta(type):
 
         for base in cls.__mro__[1:]:
             if parent_fields := getattr(base, "_fields", None):
-                for name, attr in parent_fields.items():
+                for name, field in parent_fields.items():
                     if name not in cls._fields:
-                        attr.bind(cls, name)
+                        field.bind(cls, name)
 
         if not cls._app and not cls._virtual and bases:
             cls._app = get_app_for_module(cls.__module__)
@@ -56,23 +57,93 @@ class ModelMeta(type):
         return cls._source == other._source and cls._alias == other._alias
 
 
-class QueryModelMeta(ModelMeta):
-    def __new__(mcs, name, bases, attrs):
-        attrs["_virtual"] = True
+class ProxyModel:
+    _virtual = True
+    _app: Application
+    _fields: dict[str, Field] = {}
+    _foreign_fields: dict[str, ForeignField[TableModel]] = {}
 
-        return super().__new__(mcs, name, bases, attrs)
+    def __init__(self, source: type[Model], alias: str):
+        self._source = source
+        self._alias = alias
+        self._fields = {}
+        self._foreign_fields = {}
+
+        self._bind_fields()
+        self._bind_app()
+
+    def _bind_fields(self):
+        for name, field in self._source._fields.items():
+            field.bind(self, name)
+
+    def _bind_app(self):
+        self._app = self._source._app
+
+    def __getitem__(self, alias: str):
+        return self._source.as_alias(alias)
+
+    def __sql__(self, context: QueryContext):
+        return f"{quote_ident(self._source._source)} AS {quote_ident(context.get_alias(self))}"
+
+    def __sql_alias__(self, context: QueryContext):
+        base_alias = self._alias
+        if context.level > 0:
+            return f"{base_alias}_s{context.level}"
+        return base_alias
+
+    def __hash__(self) -> int:
+        return hash(self._alias)
+
+    def __iter__(self) -> Iterator[Field]:
+        for field in self._fields.values():
+            yield getattr(self, field.name)
 
 
-class RecursiveModelMeta(QueryModelMeta):
-    def __iand__(cls: type[RecursiveModel], other: ValuesQuery) -> type[RecursiveModel]:
-        return cls << (cls._source & other)
+class QueryModel(ProxyModel):
+    _source: ValuesQuery
 
-    def __ior__(cls: type[RecursiveModel], other: ValuesQuery) -> type[RecursiveModel]:
-        return cls << (cls._source | other)
+    def __init__(self, source: ValuesQuery, alias: str = None):
+        super().__init__(source, alias=alias or f"sub{id(source)}")
 
-    def __lshift__(cls: type[RecursiveModel], other: Node) -> type[RecursiveModel]:
-        cls._source = other
-        return cls
+    def _bind_fields(self):
+        for name, value in self._source._values.items():
+            if isinstance(value, Field):
+                if value.primary:
+                    value = ForeignField(to=value.model)
+                value.bind(self, name)
+            else:
+                Field(
+                    sql_type=(
+                        value.sql_type if isinstance(value, Expression) else None
+                    ),
+                ).bind(self, name)
+
+    def _bind_app(self):
+        self._app = next(iter(self._source.relations), Model)._app
+
+    def __getitem__(self, alias: str):
+        return self.__class__(alias)
+
+    def __sql__(self, context: QueryContext):
+        return f"({self._source.__sql__(context.sub())}) AS {quote_ident(self._alias)}"
+
+
+class RecursiveModel(QueryModel):
+    def __iand__(self, other: ValuesQuery) -> Self:
+        return self << (self._source & other)
+
+    def __ior__(self: type[RecursiveModel], other: ValuesQuery) -> Self:
+        return self << (self._source | other)
+
+    def __lshift__(self: type[RecursiveModel], other: Node) -> Self:
+        self._source = other
+        return self
+
+    def __sql__(self, context: QueryContext):
+        return f"{quote_ident(self._alias)} AS ({self._source.__sql__(context)})"
+
+    def __sql_alias__(self, context: QueryContext):
+        return self._alias
 
 
 class Model(metaclass=ModelMeta):
@@ -86,16 +157,7 @@ class Model(metaclass=ModelMeta):
     @classmethod
     @lru_cache(maxsize=128)
     def as_alias(cls: type[Self], alias: str) -> type[Self]:
-        return type(
-            f"{cls.__name__}_{alias}",
-            (cls,),
-            {
-                "_alias": f"{cls._alias}_{alias}",
-                "_source": cls._source,
-                "_virtual": True,
-                "__module__": cls.__module__,
-            },
-        )
+        return ProxyModel(cls, f"{cls.__name__}_{alias}")
 
     @classmethod
     def __sql__(cls: type[Self], context: QueryContext):
@@ -121,50 +183,3 @@ class TableModel(Model):
     _virtual = True
 
     id = BigSerialField(primary=True)
-
-
-class QueryModel(Model, metaclass=QueryModelMeta):
-    _source: ValuesQuery
-
-    @classmethod
-    def factory(cls: type[Self], source: ValuesQuery):
-        alias = f"sub{id(source)}"
-        initial = {
-            "_alias": alias,
-            "_source": source,
-        }
-
-        for relation in source.relations:
-            if app := relation._app:
-                initial["_app"] = app
-                initial["__module__"] = relation.__module__
-                break
-
-        cls = type(f"{cls.__name__}_{alias}", (cls,), initial)
-        for name, value in source._values.items():
-            if isinstance(value, Field):
-                if value.primary:
-                    value = ForeignField(to=value.model)
-                value.bind(cls, name)
-            else:
-                Field(
-                    sql_type=(
-                        value.sql_type if isinstance(value, Expression) else None
-                    ),
-                ).bind(cls, name)
-
-        return cls
-
-    @classmethod
-    def __sql__(cls: type[Self], context: QueryContext):
-        return f"({cls._source.__sql__(context.sub())}) AS {quote_ident(cls._alias)}"
-
-
-class RecursiveModel(QueryModel, metaclass=RecursiveModelMeta):
-    @classmethod
-    def __sql__(cls: type[Self], context: QueryContext):
-        return f"{quote_ident(cls._alias)} AS ({cls._source.__sql__(context)})"
-
-    @classmethod
-    def __sql_alias__(cls: type[Self], context: QueryContext):
-        return cls._alias

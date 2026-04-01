@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 from sql.core.converters import get_converter
 
 if TYPE_CHECKING:
-    from sql.models import Model
+    from sql.models import T_Model
 
 COLLECTION_TYPES = list, tuple, set
 
@@ -16,7 +16,7 @@ class QueryContext:
         self.params = params if params is not None else []
         self.level = level
 
-    def get_alias(self, model: type[Model]) -> str:
+    def get_alias(self, model: T_Model) -> str:
         return model.__sql_alias__(self)
 
     def add_param(self, value: Any) -> str:
@@ -28,7 +28,7 @@ class QueryContext:
 
 
 class Node:
-    relations: set[Model]
+    relations: set[T_Model]
     isolated: bool = False
 
     def __init__(self):

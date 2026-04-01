@@ -1,10 +1,9 @@
-from sql.queries.base import ValuesQuery
-
 from sql.core.base import QueryContext
 from sql.fields.base import ComputedField, Field, ForeignField
 from sql.fields.fields import BoolField, IntField, TextField
 from sql.functions import Count
 from sql.models import TableModel
+from sql.queries.base import ValuesQuery
 
 # --- ТЕСТОВЫЕ МОДЕЛИ ---
 
@@ -53,7 +52,7 @@ def test_model_as_alias():
     U1 = User["u1"]
     assert U1._virtual is True
     assert U1._alias == "User_u1"
-    assert U1._source == "users"
+    assert U1._source == User
 
     sql = U1.__sql__(QueryContext())
     assert sql == '"users" AS "User_u1"'

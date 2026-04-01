@@ -230,7 +230,6 @@ async def test_union():
 
 @pytest.mark.asyncio
 async def test_recursive():
-
     with (
         Select(Categories.id, Categories.name, level=Raw.Scalar(0))
         .filter(Categories.parent_id == None)
