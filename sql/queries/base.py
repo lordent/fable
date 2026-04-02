@@ -35,8 +35,7 @@ class Query(QueryType, Node):
         return value
 
     async def _get_connection(self, app_name: str) -> tuple[asyncpg.Connection, bool]:
-        conn = get_session(app_name)
-        if conn:
+        if conn := get_session(app_name):
             return conn, False
         return await Engine.get_active().get_connection(app_name), True
 

@@ -120,7 +120,7 @@ class Select(ValuesQuery):
         self,
         target: T_Model,
         on: Q | None = None,
-        strategy: JoinStrategy = JoinStrategy.LEFT,
+        strategy: JoinStrategy = JoinStrategy.INNER,
     ) -> Self:
         on = on or self._auto_join(target)
         if not on:

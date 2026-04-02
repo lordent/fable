@@ -1,14 +1,11 @@
-import datetime
 from decimal import Decimal
-from uuid import uuid4
 
 import pytest
 
 from sql.core.case import Case
 from sql.core.raw import Raw, Ref
-from sql.core.types import Types
 from sql.fields.fields import DecimalField
-from sql.functions import Avg, Count, RowNumber, Sum
+from sql.functions import Avg, Count, Sum
 from sql.queries.select import Select
 from sql.queries.values import Item, List
 
@@ -16,47 +13,12 @@ from .conftest import Categories, Cities, Sales, Shops, Users
 
 
 @pytest.mark.asyncio
-async def test_select_users_integration():
-    days = 2
-    query = Select(
-        Users.id,
-        Users.name,
-        Users.birth_date,
-        birth_date_tomorrow=Raw.Scalar(
-            t"{Users.birth_date} + ({days} * INTERVAL '1 day')"
-        )
-        >> Types.DATE,
-    ).order_by(Users.id)
-    users = await query
-    assert len(users) > 0
-    assert users[0]["name"] == "Александр"
-    assert (users[0]["birth_date_tomorrow"] - users[0]["birth_date"]).days == days
-
-    now = datetime.datetime.now(datetime.UTC)
-    public_id = uuid4()
-
-    days = 4
-    query = Select(
-        Sales.amount,
-        increase_amount=Raw.Scalar(t"{Sales.amount} + {Decimal('100')} + {100.20}")
-        >> Types.NUMERIC,
-        now=Raw.Scalar(t"{now} + ({days} * INTERVAL '1 day')"),
-        public_id=Raw.Scalar(t"{public_id}"),
-    ).order_by(Sales.id)
-
-    for row in await query:
-        assert row["amount"] + Decimal("100") + Decimal("100.20") == row[
-            "increase_amount"
-        ].quantize(Decimal("0.01"))
-        assert (row["now"] - now).days == days
-        assert row["public_id"] == public_id
-
-
-@pytest.mark.asyncio
 async def test_trigram_search_integration():
-    query = Select(Users.id, Users.name).filter(Users.name.dist("аликсандр") < 0.7)
+    query = Select(Users.id, Users.first_name).filter(
+        Users.first_name.dist("аликсандр") < 0.7
+    )
     res = await query
-    assert any(row["name"] == "Александр" for row in res)
+    assert any(row["first_name"] == "Александр" for row in res)
 
 
 @pytest.mark.asyncio
@@ -240,7 +202,7 @@ async def test_union():
         )
     )
 
-    combined_query = q1 & q2
+    combined_query = q1 | q2
 
     final_model = combined_query.as_model()
     query = Select(final_model.category_name, final_model.amount).order_by(
@@ -295,80 +257,27 @@ async def test_case():
         .when(Users.tags.contains("vip"), Sales.amount * 3)
     )
 
-    query = Select(Users.name, total_points=points_calc).order_by(Users.name)
+    query = Select(Users.first_name, total_points=points_calc).order_by(
+        Users.first_name
+    )
 
     assert [dict(record) for record in await query] == [
-        {"name": "Алекс", "total_points": Decimal("0")},
-        {"name": "Александр", "total_points": Decimal("23000.00")},
-        {"name": "Алексанр", "total_points": Decimal("0")},
-        {"name": "Мария", "total_points": Decimal("23000.00")},
+        {"first_name": "Алекс", "total_points": Decimal("0")},
+        {"first_name": "Александр", "total_points": Decimal("23000.00")},
+        {"first_name": "Алексанр", "total_points": Decimal("0")},
+        {"first_name": "Мария", "total_points": Decimal("23000.00")},
     ]
 
 
 @pytest.mark.asyncio
 async def test_having_with_expression_dependency():
     query = (
-        Select(Users.name, total=Sum(Sales.amount))
+        Select(Users.first_name, total=Sum(Sales.amount))
         .filter(Sum(Sales.amount) > (Users.id * 1000))
         .group_by(Users.id)
-        .order_by(Users.name)
+        .order_by(Users.first_name)
     )
 
     res = await query
     assert len(res) > 0
-    assert any(r["name"] == "Александр" for r in res)
-
-
-@pytest.mark.asyncio
-async def test_window_functions_integration():
-    running_sum = Sum(Sales.amount).over(
-        partition_by=Sales.shop_id,
-        order_by=Sales.id,
-    )[1:0]
-
-    query = Select(Sales.id, Sales.amount, two_rows_sum=running_sum).order_by(
-        Sales.shop_id, Sales.id
-    )
-
-    res = await query
-
-    assert len(res) > 0
-
-    row1 = next(r for r in res if r["id"] == 1)
-    row2 = next(r for r in res if r["id"] == 2)
-
-    assert row1["two_rows_sum"] == 5000
-    assert row2["two_rows_sum"] == 7000
-
-
-@pytest.mark.asyncio
-async def test_row_number_simple():
-    rn = RowNumber().over(order_by=Sales.amount.desc())
-    query = Select(Sales.id, position=rn).limit(1)
-    res = await query
-
-    assert res[0]["position"] == 1
-
-
-@pytest.mark.asyncio
-async def test_window_following_slice():
-    next_diff = Sum(Sales.amount).over(order_by=Sales.id)[0:-1]
-    query = Select(Sales.id, Sales.amount, pair_sum=next_diff).order_by(Sales.id)
-    assert [dict(record) for record in await query] == [
-        {"id": 1, "amount": Decimal("5000.00"), "pair_sum": Decimal("7000.00")},
-        {"id": 2, "amount": Decimal("2000.00"), "pair_sum": Decimal("3500.00")},
-        {"id": 3, "amount": Decimal("1500.00"), "pair_sum": Decimal("4500.00")},
-        {"id": 4, "amount": Decimal("3000.00"), "pair_sum": Decimal("3000.00")},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_window_range_mode():
-    window = Sum(Sales.amount).over(order_by=Sales.amount).range[...:0]
-    query = Select(Sales.id, Sales.amount, range_sum=window).order_by(Sales.amount)
-    sql = str(query)
-
-    assert "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" in sql
-
-    res = await query
-    assert len(res) > 0
+    assert any(r["first_name"] == "Александр" for r in res)

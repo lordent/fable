@@ -61,6 +61,9 @@ class Raw(Expression):
     def escape(self, v: Any):
         return v if isinstance(v, Node) else Value(v)
 
+    def __sql_argument__(self, argument: Any, context: QueryContext):
+        return str(argument)
+
     def __sql__(self, context: QueryContext) -> str:
         parts = []
         for a in self.args:
@@ -69,7 +72,7 @@ class Raw(Expression):
             elif isinstance(a, Node):
                 parts.append(self._value(a, context))
             else:
-                parts.append(str(a))
+                parts.append(self.__sql_argument__(a, context))
 
         body = "".join(parts)
         return f"({body})::{self.sql_type}" if self.sql_type else f"({body})"

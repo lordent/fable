@@ -52,17 +52,18 @@ INSERT INTO shops (city_id, name, open_at, close_at) VALUES
 -- 4. Пользователи с датами рождения
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
     birth_date DATE NOT NULL, -- Используем DATE для дней рождения
     tags TEXT[] DEFAULT '{}',
     metadata JSONB DEFAULT '{}'
 );
 
-INSERT INTO users (name, birth_date, tags, metadata) VALUES 
-('Александр', '1998-05-15', '{tech, premium}', '{"last_login": "2023-10-01"}'), -- ~25 лет
-('Алексанр', '1993-11-10', '{sale}', '{"points": 100}'),                      -- ~30 лет
-('Алекс', '2004-02-20', '{tech}', '{}'),                                       -- ~19 лет
-('Мария', '2001-08-25', '{premium, vip}', '{"club": "gold"}');
+INSERT INTO users (first_name, last_name, birth_date, tags, metadata) VALUES 
+('Александр', 'Иванов', '1998-05-15', '{tech, premium}', '{"last_login": "2023-10-01"}'), -- ~25 лет
+('Алексанр', 'Иванов', '1993-11-10', '{sale}', '{"points": 100}'),                      -- ~30 лет
+('Алекс', 'Петров', '2004-02-20', '{tech}', '{}'),                                       -- ~19 лет
+('Мария', 'Петрова', '2001-08-25', '{premium, vip}', '{"club": "gold"}');
 
 -- 5. Продажи
 CREATE TABLE sales (

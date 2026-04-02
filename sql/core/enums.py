@@ -33,7 +33,7 @@ class DatePart(StrEnum):
 
 
 class JoinStrategy(StrEnum):
-    LEFT = "JOIN"
+    LEFT = "LEFT JOIN"
     INNER = "INNER JOIN"
     RIGHT = "RIGHT JOIN"
     FULL = "FULL OUTER JOIN"

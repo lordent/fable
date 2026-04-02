@@ -96,7 +96,8 @@ class Shops(TableModel):
 
 
 class Users(TableModel):
-    name = TextField()
+    first_name = TextField()
+    last_name = TextField()
     birth_date = DateField()
     tags = ArrayField(TextField())
     metadata = JsonbField()
