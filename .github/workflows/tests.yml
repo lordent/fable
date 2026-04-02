@@ -9,9 +9,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Build Docker images
+        run: docker compose build
+
+      - name: Start Database and Wait
+        run: |
+          docker compose up -d db
+          docker compose exec -T db sh -c 'until pg_isready -h localhost -p 5432; do echo "Waiting for postgres..."; sleep 2; done'
+
       - name: Run tests with coverage
         run: |
-          docker compose run --rm web pytest --cov=sql --cov-report=term-missing > coverage_report.txt
+          docker compose run -T --rm web pytest --cov=sql --cov-report=term-missing > coverage_report.txt
           echo "### 📊 Отчет по покрытию тестами" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           cat coverage_report.txt >> $GITHUB_STEP_SUMMARY
@@ -19,4 +27,9 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          docker compose run --rm web pytest --cov=sql --cov-fail-under=80
+          docker compose run -T --rm web pytest --cov=sql --cov-fail-under=80
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down
+        
