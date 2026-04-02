@@ -9,17 +9,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker images
+      - name: Build Docker image
         run: docker compose build
 
       - name: Start Database and Wait
         run: |
           docker compose up -d db
-          docker compose exec -T db sh -c 'until pg_isready -h localhost -p 5432; do echo "Waiting for postgres..."; sleep 2; done'
+          echo "Waiting for PostgreSQL to be healthy..."
+          # Ждем, пока контейнер db станет 'healthy'
+          docker compose exec -T db sh -c 'until pg_isready -U user -d sql_builder; do echo "Waiting..."; sleep 2; done'
 
       - name: Run tests with coverage
         run: |
-          docker compose run -T --rm web pytest --cov=sql --cov-report=term-missing > coverage_report.txt
+          docker compose run -T --rm --user root web sh -c "
+            chown -R vscode:vscode /app && \
+            su vscode -c 'pytest --cov=sql --cov-report=term-missing'
+          " > coverage_report.txt
+          
+          # Красивый вывод отчета в GitHub Actions Summary
           echo "### 📊 Отчет по покрытию тестами" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           cat coverage_report.txt >> $GITHUB_STEP_SUMMARY
@@ -27,9 +34,11 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          docker compose run -T --rm web pytest --cov=sql --cov-fail-under=80
+          docker compose run -T --rm --user root web sh -c "
+            chown -R vscode:vscode /app && \
+            su vscode -c 'pytest --cov=sql --cov-fail-under=80'
+          "
 
       - name: Cleanup
         if: always()
-        run: docker compose down
-        
+        run: docker compose down -v
