@@ -2,6 +2,10 @@ name: Tests and Coverage
 
 on: [push, pull_request]
 
+permissions:
+  pull-requests: write
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -9,14 +13,42 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run tests with coverage
+      - name: Build Docker images
+        run: docker compose build
+
+      - name: Start Database and Wait
         run: |
-          docker compose run --rm web pytest --cov=sql --cov-report=term-missing > coverage_report.txt
-          echo "### 📊 Отчет по покрытию тестами" >> $GITHUB_STEP_SUMMARY
-          echo '```text' >> $GITHUB_STEP_SUMMARY
-          cat coverage_report.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          docker compose up -d db
+          docker compose exec -T db sh -c 'until pg_isready -U user -d sql_builder; do echo "Waiting for DB..."; sleep 2; done'
+
+      - name: Run tests with XML coverage
+        # Добавляем --cov-report=xml, чтобы Action мог прочитать данные
+        run: |
+          docker compose run -T --rm --user root web sh -c "
+            chown -R vscode:vscode /app && \
+            su vscode -c 'pytest --cov=sql --cov-report=term-missing --cov-report=xml'
+          "
+
+      - name: Pytest coverage comment
+        # Этот Action создаст таблицу и аннотации в коде
+        uses: MishaKav/pytest-coverage-comment@main
+        with:
+          pytest-xml-coverage-path: ./coverage.xml
+          title: "📊 Детальный отчет по покрытию"
+          badge-title: "Coverage"
+          hide-badge: false
+          hide-report: false
+          create-new-comment: false
 
       - name: Check coverage threshold
+        # Финальная проверка порога (fail, если < 80%)
         run: |
-          docker compose run --rm web pytest --cov=sql --cov-fail-under=80
+          docker compose run -T --rm --user root web sh -c "
+            chown -R vscode:vscode /app && \
+            su vscode -c 'pytest --cov=sql --cov-fail-under=80'
+          "
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+      
