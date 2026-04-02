@@ -1,5 +1,3 @@
-import pytest
-
 from sql.core.base import (
     Node,
     QueryContext,
@@ -99,7 +97,7 @@ def test_prepare_interface():
 def test_injection():
     danger_value = "(SELECT TRUNCATE 'users')"
 
-    with pytest.raises(TypeError) as excinfo:
-        Raw.Scalar(t"{Users.birth_date} + interval '{danger_value} day'")
-
-    assert "не поддерживается в Raw" in str(excinfo.value)
+    expression = Raw.Scalar(t"{Users.birth_date} + {danger_value}")
+    assert ['("Users"."birth_date" + $1::TEXT)', danger_value] == list(
+        expression.prepare()
+    )

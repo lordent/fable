@@ -1,15 +1,13 @@
-from datetime import date, datetime
-from decimal import Decimal
 from string.templatelib import Template
 from typing import Any
-from uuid import UUID
 
 from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
 from sql.core.expressions import Expression
+from sql.core.helpers import from_python
 from sql.core.scalars import ScalarExpression
-from sql.core.types import AggregateType, ScalarType, Types
-from sql.utils import extract_template, quote_ident, quote_literal
+from sql.core.types import AggregateType, ScalarType
+from sql.utils import extract_template, quote_ident
 
 
 class Ref(Expression):
@@ -37,40 +35,44 @@ ScalarType.Ref = Ref.Scalar = ScalarRef
 AggregateType.Ref = Ref.Aggregate = AggregateRef
 
 
+class Value:
+    __slots__ = ("value", "sql_type")
+
+    def __init__(self, value: Any):
+        self.value = value
+        self.sql_type = from_python(value)
+
+
 class Raw(Expression):
     Scalar: type[ScalarRaw]
     Aggregate: type[AggregateRaw]
 
     def __init__(self, value: Any):
         super().__init__()
-
         if isinstance(value, Template):
             self.args = [
-                self._arg(a) for a in extract_template(value, validator=self.validator)
+                self._arg(a) for a in extract_template(value, validator=self.escape)
             ]
-        else:
-            self.args = [self.validator(value)]
+        elif not isinstance(value, Node):
+            value: Value = Value(value)
+            self.sql_type = value.sql_type
+            self.args = [value]
 
-    def validator(self, value: Any):
-        if isinstance(value, Node):
-            return value
-
-        if isinstance(value, datetime | date):
-            value = f"{quote_literal(value.isoformat())}::{Types.TIMESTAMPTZ}"
-        elif isinstance(value, UUID):
-            value = f"{quote_literal(value.hex)}::{Types.UUID}"
-        elif not isinstance(value, int | float | Decimal):
-            raise TypeError(f"Тип {type(value)} не поддерживается в Raw")
-
-        return value
+    def escape(self, v: Any):
+        return v if isinstance(v, Node) else Value(v)
 
     def __sql__(self, context: QueryContext) -> str:
-        return f"({
-            ''.join(
-                self._value(a, context) if isinstance(a, Node) else str(a)
-                for a in self.args
-            )
-        })"
+        parts = []
+        for a in self.args:
+            if isinstance(a, Value):
+                parts.append(f"{self._value(a.value, context)}::{a.sql_type}")
+            elif isinstance(a, Node):
+                parts.append(self._value(a, context))
+            else:
+                parts.append(str(a))
+
+        body = "".join(parts)
+        return f"({body})::{self.sql_type}" if self.sql_type else f"({body})"
 
 
 class ScalarRaw(ScalarExpression, Raw):

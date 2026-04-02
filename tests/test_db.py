@@ -17,32 +17,38 @@ from .conftest import Categories, Cities, Sales, Shops, Users
 
 @pytest.mark.asyncio
 async def test_select_users_integration():
+    days = 2
     query = Select(
         Users.id,
         Users.name,
         Users.birth_date,
-        birth_date_tomorrow=Raw.Scalar(t"{Users.birth_date} + INTERVAL '{1} day'")
+        birth_date_tomorrow=Raw.Scalar(
+            t"{Users.birth_date} + ({days} * INTERVAL '1 day')"
+        )
         >> Types.DATE,
     ).order_by(Users.id)
     users = await query
     assert len(users) > 0
     assert users[0]["name"] == "Александр"
-    assert (users[0]["birth_date_tomorrow"] - users[0]["birth_date"]).days == 1
+    assert (users[0]["birth_date_tomorrow"] - users[0]["birth_date"]).days == days
 
     now = datetime.datetime.now(datetime.UTC)
     public_id = uuid4()
 
+    days = 4
     query = Select(
         Sales.amount,
-        increase_amount=Raw.Scalar(t"{Sales.amount} + {Decimal('100')} + {100.20}"),
-        now=Raw.Scalar(t"{now} + INTERVAL '{1} day'"),
+        increase_amount=Raw.Scalar(t"{Sales.amount} + {Decimal('100')} + {100.20}")
+        >> Types.NUMERIC,
+        now=Raw.Scalar(t"{now} + ({days} * INTERVAL '1 day')"),
         public_id=Raw.Scalar(t"{public_id}"),
     ).order_by(Sales.id)
+
     for row in await query:
-        assert (
-            row["amount"] + Decimal("100") + Decimal("100.20") == row["increase_amount"]
-        )
-        assert (row["now"] - now).days == 1
+        assert row["amount"] + Decimal("100") + Decimal("100.20") == row[
+            "increase_amount"
+        ].quantize(Decimal("0.01"))
+        assert (row["now"] - now).days == days
         assert row["public_id"] == public_id
 
 

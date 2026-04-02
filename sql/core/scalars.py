@@ -1,7 +1,6 @@
 from typing import Any
-from xml.dom import Node
 
-from sql.core.base import QueryContext
+from sql.core.base import COLLECTION_TYPES, Node, QueryContext
 from sql.core.expressions import Expression
 from sql.core.types import QueryType, ScalarType, T_SqlType, Types
 
@@ -49,7 +48,7 @@ class Q(ScalarExpression):
     def __sql__(self, context: QueryContext) -> str:
         left, op, right = self.left, self.op, self.right
 
-        if isinstance(right, (list, tuple, set)) and op in ARRAY_OPS:
+        if isinstance(right, COLLECTION_TYPES) and op in ARRAY_OPS:
             if not right:
                 return "(1=0)"
 
