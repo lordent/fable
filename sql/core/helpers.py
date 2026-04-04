@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from sql.core.base import COLLECTION_TYPES
-from sql.core.types import SqlType, Types
+from sql.core.datatypes import SqlType, Types
 
 
 def from_python(value: Any) -> SqlType:

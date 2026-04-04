@@ -5,8 +5,6 @@ from sql.core.base import (
 from sql.core.converters import register_converter
 from sql.core.enums import OrderDirections
 from sql.core.order import OrderBy
-from sql.core.raw import Raw
-from tests.conftest import Users
 
 # --- МОКИ ДЛЯ ТЕСТОВ ---
 
@@ -92,12 +90,3 @@ def test_prepare_interface():
     assert len(res) == 2
     assert res[0] == "CAST($1 AS TEXT)"
     assert res[1] == "data"
-
-
-def test_injection():
-    danger_value = "(SELECT TRUNCATE 'users')"
-
-    expression = Raw.Scalar(t"{Users.birth_date} + {danger_value}")
-    assert ['("Users"."birth_date" + $1::TEXT)', danger_value] == list(
-        expression.prepare()
-    )

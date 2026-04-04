@@ -4,11 +4,11 @@ from typing import Any
 from sql.core.aggregates import AggregateFunc, UnaryAggregate
 from sql.core.base import QueryContext
 from sql.core.converters import register_converter
+from sql.core.datatypes import Types
 from sql.core.enums import DatePart
 from sql.core.expressions import Expression
 from sql.core.raw import Raw
 from sql.core.scalars import ScalarExpression, ScalarFunc
-from sql.core.types import Types
 from sql.utils import extract_template
 
 

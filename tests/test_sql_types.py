@@ -1,4 +1,4 @@
-from sql.core.types import Types
+from sql.core.datatypes import Types
 
 
 def test_basic_types():

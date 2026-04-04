@@ -1,8 +1,9 @@
 from typing import Any
 
 from sql.core.base import COLLECTION_TYPES, Node, QueryContext
+from sql.core.datatypes import Types
 from sql.core.expressions import Expression
-from sql.core.types import QueryType, ScalarType, T_SqlType, Types
+from sql.core.types import QueryType, ScalarType, T_SqlType
 
 
 class ScalarExpression(ScalarType, Expression):
@@ -47,6 +48,10 @@ class Q(ScalarExpression):
 
     def __sql__(self, context: QueryContext) -> str:
         left, op, right = self.left, self.op, self.right
+
+        if op == "NOT":
+            r_sql = self._value(right, context)
+            return f"(NOT {r_sql})"
 
         if isinstance(right, COLLECTION_TYPES) and op in ARRAY_OPS:
             if not right:

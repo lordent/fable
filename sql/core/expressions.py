@@ -1,8 +1,9 @@
 from typing import TYPE_CHECKING, Any, overload
 
 from sql.core.base import COLLECTION_TYPES, Node
+from sql.core.datatypes import Types
 from sql.core.order import OrderBy
-from sql.core.types import AggregateType, ScalarType, T_SqlType, Types
+from sql.core.types import AggregateType, ScalarType, T_SqlType
 
 if TYPE_CHECKING:
     from sql.core.aggregates import (

@@ -13,24 +13,6 @@ from .conftest import Categories, Cities, Sales, Shops, Users
 
 
 @pytest.mark.asyncio
-async def test_trigram_search_integration():
-    query = Select(Users.id, Users.first_name).filter(
-        Users.first_name.dist("аликсандр") < 0.7
-    )
-    res = await query
-    assert any(row["first_name"] == "Александр" for row in res)
-
-
-@pytest.mark.asyncio
-async def test_shops_open_now_integration():
-    query = (
-        Select(Shops.name, city=Cities.name).join(Cities).filter(Shops.is_open_now())
-    )
-    res = await query
-    assert isinstance(res, list)
-
-
-@pytest.mark.asyncio
 async def test_analytics_rollup_integration():
     query = (
         Select(

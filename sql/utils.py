@@ -17,7 +17,4 @@ def quote_ident(name: str):
 
 
 def quote_literal(value: Any):
-    if value is None:
-        return "NULL"
-
     return f"'{str(value).replace("'", "''")}'"

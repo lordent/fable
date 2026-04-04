@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, overload
 
-from sql.core.types import Types
+from sql.core.datatypes import Types
 from sql.fields.base import Field
 from sql.functions import Age, Extract
 

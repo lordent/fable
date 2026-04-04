@@ -6,7 +6,7 @@ from sql.core.base import Node, QueryContext
 from sql.core.expressions import Expression
 from sql.core.helpers import from_python
 from sql.core.scalars import ScalarExpression
-from sql.core.types import AggregateType, ScalarType
+from sql.core.types import AggregateType, ScalarType, T_SqlType
 from sql.utils import extract_template, quote_ident
 
 
@@ -38,9 +38,9 @@ AggregateType.Ref = Ref.Aggregate = AggregateRef
 class Value:
     __slots__ = ("value", "sql_type")
 
-    def __init__(self, value: Any):
+    def __init__(self, value: Any, sql_type: T_SqlType = None):
         self.value = value
-        self.sql_type = from_python(value)
+        self.sql_type = sql_type or from_python(value)
 
 
 class Raw(Expression):
@@ -54,12 +54,12 @@ class Raw(Expression):
                 self._arg(a) for a in extract_template(value, validator=self.escape)
             ]
         elif not isinstance(value, Node):
-            value: Value = Value(value)
+            value: Value = value if isinstance(value, Value) else Value(value)
             self.sql_type = value.sql_type
             self.args = [value]
 
     def escape(self, v: Any):
-        return v if isinstance(v, Node) else Value(v)
+        return v if isinstance(v, Node | Value) else Value(v)
 
     def __sql_argument__(self, argument: Any, context: QueryContext):
         return str(argument)

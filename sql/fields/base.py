@@ -5,9 +5,9 @@ from string.templatelib import Template
 from typing import TYPE_CHECKING, Literal, Self, TypeVar
 
 from sql.core.base import QueryContext
+from sql.core.datatypes import Types
 from sql.core.expressions import Expression
 from sql.core.scalars import Q, ScalarExpression
-from sql.core.types import SqlType, Types
 from sql.functions import Concat
 from sql.utils import quote_ident
 
@@ -35,7 +35,7 @@ class FieldMeta(type):
 
 class Field(ScalarExpression, metaclass=FieldMeta):
     _blueprint: tuple[tuple, dict]
-    sql_type: SqlType = Types.TEXT
+    sql_type = Types.TEXT
 
     def __init__(self, sql_type=None, primary=False):
         super().__init__(sql_type)

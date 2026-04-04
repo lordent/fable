@@ -2,17 +2,21 @@ from decimal import Decimal
 
 import pytest
 
-from sql.functions import RowNumber, Sum
+from sql.functions import Count, Lag, RowNumber, Sum
 from sql.queries.select import Select
-from tests.conftest import Sales
+from tests.conftest import Sales, Shops
 
 
 @pytest.mark.asyncio
 async def test_window_functions_integration():
-    running_sum = Sum(Sales.amount).over(
-        partition_by=Sales.shop_id,
-        order_by=Sales.id,
-    )[1:0]
+    running_sum = (
+        Sum(Sales.amount)
+        .over(
+            partition_by=Sales.shop_id,
+            order_by=Sales.id,
+        )
+        .rows[1:0]
+    )
 
     query = Select(Sales.id, Sales.amount, two_rows_sum=running_sum).order_by(
         Sales.shop_id, Sales.id
@@ -60,3 +64,47 @@ async def test_window_range_mode():
 
     res = await query
     assert len(res) > 0
+
+
+@pytest.mark.asyncio
+async def test_filtered_aggregate_integration():
+    query = (
+        Select(
+            Shops.name,
+            total_count=Count(Sales.id),
+            big_sales_count=Count(Sales.id).filter(Sales.amount > 3000),
+        )
+        .join(Sales)
+        .group_by(Shops.name)
+        .order_by(Shops.name)
+    )
+
+    res = await query
+
+    msk = next(r for r in res if r["name"] == "Мск 24/7 Гаджеты")
+    assert msk["total_count"] == 2
+    assert msk["big_sales_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_lag_function_integration():
+    lag_node = Lag(Sales.amount, offset=1, default=0)
+    assert lag_node.sql_type == Sales.amount.sql_type
+    query = Select(
+        current_amount=Sales.amount,
+        prev_amount=Lag(Sales.amount, 1, Decimal("0.00")).over(order_by=Sales.id),
+    ).order_by(Sales.id)
+
+    res = await query
+
+    assert res[0]["current_amount"] == Decimal("5000.00")
+    assert res[0]["prev_amount"] == Decimal("0.00")
+    assert res[1]["current_amount"] == Decimal("2000.00")
+    assert res[1]["prev_amount"] == Decimal("5000.00")
+
+    query = Select(prev_prev=Lag(Sales.amount, 2).over(order_by=Sales.id)).order_by(
+        Sales.id
+    )
+
+    res = await query
+    assert res[2]["prev_prev"] == Decimal("5000.00")

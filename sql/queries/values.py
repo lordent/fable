@@ -2,8 +2,8 @@ from typing import Any
 
 from sql.core.aggregates import AggregateExpression
 from sql.core.base import Node, QueryContext
+from sql.core.datatypes import Types
 from sql.core.scalars import ScalarExpression
-from sql.core.types import Types
 from sql.fields.base import Field
 from sql.typings import typewith
 from sql.utils import quote_literal

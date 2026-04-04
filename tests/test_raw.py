@@ -4,21 +4,27 @@ from uuid import uuid4
 
 import pytest
 
-from sql.core.raw import Raw
-from sql.core.types import Types
+from sql.core.datatypes import Types
+from sql.core.raw import Raw, Value
 from sql.queries.raw import RawQuery
 from sql.queries.select import Select
 from tests import TestApplication
 from tests.conftest import Sales, Users
 
 
-@pytest.mark.asyncio
-async def test_impossible():
+def test_impossible():
     with pytest.raises(TypeError):
-        Raw.Scalar(t"{Users.tags} || {[]}")
+        Raw(t"{Users.tags} || {[]}")
 
     with pytest.raises(TypeError):
-        Raw.Scalar(t"{Users.tags} || {...}")
+        Raw(t"{Users.tags} || {...}")
+
+
+def test_empty_list():
+    assert (
+        Raw(t"{Users.tags} || {Value([], Types.TEXT[:])}")
+        == '("Users"."tags" || $1::TEXT[])'
+    )
 
 
 @pytest.mark.asyncio
@@ -94,3 +100,12 @@ async def test_raw_query():
             "birth_date": datetime.date(1993, 11, 10),
         },
     ]
+
+
+def test_injection():
+    danger_value = "(SELECT TRUNCATE 'users')"
+
+    expression = Raw.Scalar(t"{Users.birth_date} + {danger_value}")
+    assert ['("Users"."birth_date" + $1::TEXT)', danger_value] == list(
+        expression.prepare()
+    )
