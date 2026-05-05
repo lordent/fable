@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .base import Node
+    from sql.core.node import Node
 
 _CONVERTERS: dict[type, type[Node]] = {}
 

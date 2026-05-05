@@ -20,6 +20,20 @@ class QueryContext:
         self.params.append(value)
         return f"${len(self.params)}"
 
+    def value(self, value: Any) -> str:
+        if isinstance(value, Node):
+            sql = value.__sql__(self)
+
+            if isinstance(value, QueryType):
+                return f"({sql})"
+
+            return sql
+
+        if value is None:
+            return "NULL"
+
+        return self.add_param(value)
+
     def sub(self):
         return self.__class__(params=self.params, level=self.level + 1)
 
@@ -45,15 +59,6 @@ class Node:
         if isinstance(value, COLLECTION_TYPES):
             return [self._arg(a) for a in value]
         return [self._arg(value)]
-
-    def _value(self, value: Any, context: QueryContext) -> str:
-        if isinstance(value, Node):
-            return value.__sql__(context)
-
-        if value is None:
-            return "NULL"
-
-        return context.add_param(value)
 
     def __sql__(self, context: QueryContext) -> str:
         raise NotImplementedError()

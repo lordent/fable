@@ -2,18 +2,14 @@ from string.templatelib import Template
 from typing import Any
 
 from sql.core.aggregates import AggregateExpression
-from sql.core.base import Node, QueryContext
 from sql.core.expressions import Expression
 from sql.core.helpers import from_python
-from sql.core.scalars import ScalarExpression
-from sql.core.types import AggregateType, ScalarType, T_SqlType
+from sql.core.node import Node, QueryContext
+from sql.core.types import T_SqlType
 from sql.utils import extract_template, quote_ident
 
 
 class Ref(Expression):
-    Scalar: type[ScalarRef]
-    Aggregate: type[AggregateRef]
-
     def __init__(self, reference: str):
         super().__init__()
 
@@ -21,18 +17,6 @@ class Ref(Expression):
 
     def __sql__(self, context: QueryContext):
         return quote_ident(self.reference)
-
-
-class ScalarRef(ScalarExpression, Ref):
-    pass
-
-
-class AggregateRef(AggregateExpression, Ref):
-    pass
-
-
-ScalarType.Ref = Ref.Scalar = ScalarRef
-AggregateType.Ref = Ref.Aggregate = AggregateRef
 
 
 class Value:
@@ -44,11 +28,11 @@ class Value:
 
 
 class Raw(Expression):
-    Scalar: type[ScalarRaw]
     Aggregate: type[AggregateRaw]
 
     def __init__(self, value: Any):
         super().__init__()
+
         if isinstance(value, Template):
             self.args = [
                 self._arg(a) for a in extract_template(value, validator=self.escape)
@@ -68,9 +52,9 @@ class Raw(Expression):
         parts = []
         for a in self.args:
             if isinstance(a, Value):
-                parts.append(f"{self._value(a.value, context)}::{a.sql_type}")
+                parts.append(f"{context.value(a.value)}::{a.sql_type}")
             elif isinstance(a, Node):
-                parts.append(self._value(a, context))
+                parts.append(context.value(a))
             else:
                 parts.append(self.__sql_argument__(a, context))
 
@@ -78,13 +62,8 @@ class Raw(Expression):
         return f"({body})::{self.sql_type}" if self.sql_type else f"({body})"
 
 
-class ScalarRaw(ScalarExpression, Raw):
-    pass
-
-
 class AggregateRaw(AggregateExpression, Raw):
     pass
 
 
-ScalarType.Raw = Raw.Scalar = ScalarRaw
-AggregateType.Raw = Raw.Aggregate = AggregateRaw
+Raw.Aggregate = AggregateRaw

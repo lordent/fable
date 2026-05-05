@@ -3,8 +3,8 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from sql.app import Application, get_app_for_module
-from sql.core.base import Node, QueryContext
 from sql.core.expressions import Expression
+from sql.core.node import Node, QueryContext
 from sql.db import ConnectionManager, TransactionContext
 from sql.fields.base import Field, ForeignField
 from sql.fields.fields import BigSerialField
@@ -121,7 +121,7 @@ class QueryModel(ProxyModel):
         self._app = self._source.app
 
     def __getitem__(self, alias: str):
-        return self.__class__(alias)
+        return self.__class__(self._source, alias)
 
     def __sql__(self, context: QueryContext):
         return f"({self._source.__sql__(context.sub())}) AS {quote_ident(self._alias)}"

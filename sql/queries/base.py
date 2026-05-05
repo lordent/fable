@@ -8,12 +8,11 @@ import asyncpg
 from sql.analyze import AnalyzerConfig, analyze_plan
 from sql.analyze import logger as analyze_logger
 from sql.app import Application
+from sql.core.node import Node, QueryContext
 from sql.core.types import QueryType
+from sql.db import Engine, get_session
+from sql.models import QueryModel, RecursiveModel
 from sql.queries.values import ValuesNodeMixin
-
-from ..core.base import Node, QueryContext
-from ..db import Engine, get_session
-from ..models import QueryModel, RecursiveModel
 
 
 class Query(QueryType, Node):

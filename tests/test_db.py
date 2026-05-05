@@ -1,28 +1,38 @@
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
 from sql.core.case import Case
 from sql.core.raw import Raw, Ref
+from sql.db import ConnectionManager, TransactionContext
 from sql.fields.fields import DecimalField
 from sql.functions import Avg, Count, Sum
+from sql.queries.base import RecursiveContext
 from sql.queries.select import Select
 from sql.queries.values import Item, List
 
 from .conftest import Categories, Cities, Sales, Shops, Users
 
 
+def test_model_connection():
+    assert isinstance(Users.atomic(), TransactionContext)
+    assert isinstance(Users.connection(), ConnectionManager)
+
+
 @pytest.mark.asyncio
 async def test_analytics_rollup_integration():
+    total_sales = Sum(Sales.amount) >> DecimalField(12, 2)
     query = (
         Select(
             shop=Shops.name,
-            total_sales=Sum(Sales.amount) >> DecimalField(12, 2),
+            total_sales=total_sales,
         )
         .join(Sales)
         .summary(Shops.name)
         .order_by(Shops.name.asc())
     )
+
     res = await query
 
     summary_row = next(row for row in res if row["shop"] is None)
@@ -149,7 +159,7 @@ async def test_join():
         )
         .join(Sales, strategy=Select.Join.RIGHT)
         .order_by(
-            Ref.Aggregate("sales_count").desc(),
+            Ref("sales_count").desc(),
         )
     )
 
@@ -198,12 +208,36 @@ async def test_union():
 
 @pytest.mark.asyncio
 async def test_recursive():
+    recursive_context = (
+        Select(Categories.id, Categories.name, level=Raw(0))
+        .filter(Categories.parent_id == None)
+        .recursive()
+    )
+
+    assert isinstance(recursive_context, RecursiveContext)
+
+    with recursive_context as Tree:
+        Tree &= Select(Categories.id, Categories.name, level=Tree.level + 1).join(Tree)
+
+    query = Select(*Tree).order_by(Tree.id.asc())
+
+    assert [dict(record) for record in await query] == [
+        {"id": 1, "name": "Электроника", "level": 0},
+        {"id": 2, "name": "Аксессуары", "level": 1},
+        {"id": 3, "name": "Гаджеты", "level": 2},
+        {"id": 4, "name": "Бижутерия", "level": 2},
+        {"id": 5, "name": "Одежда", "level": 0},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recursive_union_all():
     with (
-        Select(Categories.id, Categories.name, level=Raw.Scalar(0))
+        Select(Categories.id, Categories.name, level=Raw(0))
         .filter(Categories.parent_id == None)
         .recursive() as Tree
     ):
-        Tree &= Select(Categories.id, Categories.name, level=Tree.level + 1).join(Tree)
+        Tree |= Select(Categories.id, Categories.name, level=Tree.level + 1).join(Tree)
 
     query = Select(*Tree).order_by(Tree.id.asc())
 
@@ -252,14 +286,54 @@ async def test_case():
 
 
 @pytest.mark.asyncio
+async def test_case_edge_cases():
+    default = Case(default="Always")
+
+    assert default.sql_type is None
+
+    default = Case(default=Sales.created_at)
+
+    assert default.sql_type == Sales.created_at.sql_type
+
+    query = Select(
+        Sales.id,
+        status=Case().when(Sales.amount < 3000, "Rich"),
+        default=Case(default="Always"),
+    ).filter(Sales.amount < 2000)
+
+    assert [dict(record) for record in await query] == [
+        {"id": 3, "status": "Rich", "default": "Always"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_having_with_expression_dependency():
     query = (
-        Select(Users.first_name, total=Sum(Sales.amount))
+        Select(
+            Users.first_name,
+            total=Sum(Sales.amount),
+        )
         .filter(Sum(Sales.amount) > (Users.id * 1000))
         .group_by(Users.id)
         .order_by(Users.first_name)
     )
 
     res = await query
+
     assert len(res) > 0
     assert any(r["first_name"] == "Александр" for r in res)
+
+
+@pytest.mark.asyncio
+async def test_extract():
+    today = datetime.now()
+    check_days = 9
+
+    query = Select(
+        Sales.created_at,
+        diff_days=abs((Sales.created_at - (today + timedelta(days=check_days))).days),
+    )
+
+    res = await query
+    for r in res:
+        assert r["diff_days"] == check_days

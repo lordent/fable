@@ -1,4 +1,6 @@
-from sql.core.base import QueryContext
+import pytest
+
+from sql.core.node import QueryContext
 from sql.fields.base import ForeignField
 from sql.fields.fields import IntField, TextField
 from sql.functions import Count, Rank, Sum
@@ -163,7 +165,7 @@ def test_empty_in_clause_safety():
 
 
 def test_triple_nested_subquery_aliases():
-    L3 = Select(User.id, User.name).as_model()
+    L3 = Select(User.id, User.name).as_model()["L3"]
     L2 = Select(L3.id, L3.name).filter(L3.id > 10).as_model()
     query = Select(L2.name).filter(L2.id < 100)
     sql = query.__sql__(QueryContext())
@@ -188,3 +190,8 @@ def test_array_operator_typing():
 
     assert "= ANY($1::BIGSERIAL[])" in sql
     assert params == [[1, 2, 3]]
+
+
+def test_bad_values():
+    with pytest.raises(ValueError):
+        Select(10)

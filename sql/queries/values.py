@@ -1,9 +1,9 @@
 from typing import Any
 
 from sql.core.aggregates import AggregateExpression
-from sql.core.base import Node, QueryContext
 from sql.core.datatypes import Types
-from sql.core.scalars import ScalarExpression
+from sql.core.expressions import Expression
+from sql.core.node import Node, QueryContext
 from sql.fields.base import Field
 from sql.typings import typewith
 from sql.utils import quote_literal
@@ -21,7 +21,11 @@ class ValuesNodeMixin(typewith(Node)):
 
     def _arg(self, value: Any):
         value = super()._arg(value)
-        if isinstance(value, AggregateExpression):
+        if (
+            not self._has_aggregate
+            and isinstance(value, Expression)
+            and value.is_aggregation
+        ):
             self._has_aggregate = True
         return value
 
@@ -38,12 +42,12 @@ class ValuesNodeMixin(typewith(Node)):
         return self
 
 
-class Item(ValuesNodeMixin, ScalarExpression):
+class Item(ValuesNodeMixin, Expression):
     sql_type = Types.JSONB
 
     def _json_build_recursive(self, fields: dict, context: QueryContext):
         tokens = [
-            f"{quote_literal(name)}, {self._value(value, context)}"
+            f"{quote_literal(name)}, {context.value(value)}"
             for name, value in fields.items()
         ]
         return f"JSONB_BUILD_OBJECT({', '.join(tokens)})"

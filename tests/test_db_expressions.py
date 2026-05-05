@@ -11,17 +11,17 @@ from .conftest import Categories, Sales, Users
 @pytest.mark.asyncio
 async def test_invert():
     query = (
-        Select(Users.first_name)
+        Select(Users.full_name)
         .filter(~(Users.first_name == "Александр"))
         .order_by(Users.first_name)
     )
 
     res = await query
-    names = [r["first_name"] for r in res]
+    names = [r["full_name"] for r in res]
 
-    assert "Александр" not in names
-    assert "Алекс" in names
-    assert "Мария" in names
+    assert "Александр Иванов" not in names
+    assert "Алекс Петров" in names
+    assert "Мария Петрова" in names
 
     condition = (Users.first_name == "Александр") & (Users.last_name == "Иванов")
 
@@ -153,3 +153,28 @@ async def test_arithmetics():
     query = Select(is_even=Users.id % 2).filter(Users.id == 2)
     res = await query
     assert res[0]["is_even"] == 0
+
+
+@pytest.mark.asyncio
+async def test_order_by_nulls_logic_integration():
+    query_first = (
+        Select(Categories.name, Categories.parent_id)
+        .order_by(Categories.parent_id.asc(nulls_first=True))
+        .limit(1)
+    )
+    res_first = await query_first
+    assert res_first[0]["parent_id"] is None
+
+    query_last = Select(Categories.name, Categories.parent_id).order_by(
+        Categories.parent_id.asc(nulls_first=False)
+    )
+    res_last = await query_last
+
+    assert res_last[-1]["parent_id"] is None
+    assert res_last[0]["parent_id"] is not None
+
+    query_desc_first = Select(Categories.parent_id).order_by(
+        Categories.parent_id.desc(nulls_first=True)
+    )
+    res_desc_first = await query_desc_first
+    assert res_desc_first[0]["parent_id"] is None

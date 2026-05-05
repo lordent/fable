@@ -1,18 +1,13 @@
 from typing import Any, TypeVar
 
 from sql.core.aggregates import AggregateExpression
-from sql.core.base import Node, QueryContext
 from sql.core.expressions import Expression
-from sql.core.scalars import ScalarExpression
-from sql.core.types import AggregateType, ScalarType
+from sql.core.node import Node, QueryContext
 
 T = TypeVar("T", bound="Case")
 
 
 class Case(Expression):
-    Scalar: type[ScalarCase]
-    Aggregate: type[AggregateCase]
-
     def __init__(self, default: Any = None):
         super().__init__()
 
@@ -35,28 +30,18 @@ class Case(Expression):
 
     def __sql__(self, context: QueryContext) -> str:
         if not self._cases:
-            return self._value(self._else, context) if self._else else "NULL"
+            return context.value(self._else) if self._else else "NULL"
 
         parts = ["CASE"]
         for cond, res in self._cases:
-            parts.append(
-                f"WHEN {cond.__sql__(context)} THEN {self._value(res, context)}"
-            )
+            parts.append(f"WHEN {cond.__sql__(context)} THEN {context.value(res)}")
 
         if self._else is not None:
-            parts.append(f"ELSE {self._value(self._else, context)}")
+            parts.append(f"ELSE {context.value(self._else)}")
 
         parts.append("END")
         return f"({' '.join(parts)})"
 
 
-class ScalarCase(ScalarExpression, Case):
-    pass
-
-
 class AggregateCase(AggregateExpression, Case):
     pass
-
-
-ScalarType.Case = Case.Scalar = ScalarCase
-AggregateType.Case = Case.Aggregate = AggregateCase

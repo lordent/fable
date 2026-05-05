@@ -1,9 +1,6 @@
-from sql.core.base import (
-    Node,
-    QueryContext,
-)
 from sql.core.converters import register_converter
 from sql.core.enums import OrderDirections
+from sql.core.node import Node, QueryContext
 from sql.core.order import OrderBy
 
 # --- МОКИ ДЛЯ ТЕСТОВ ---

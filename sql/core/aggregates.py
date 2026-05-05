@@ -1,62 +1,29 @@
 from types import EllipsisType
 from typing import Any, Literal, Self
 
-from sql.core.base import QueryContext
 from sql.core.enums import FrameBound, FrameMode
 from sql.core.expressions import Expression
+from sql.core.functions import Func
+from sql.core.node import QueryContext
 from sql.core.order import OrderBy
-from sql.core.scalars import AtTimeZone, Cast, Coalesce, Func, Q, ScalarExpression
-from sql.core.types import AggregateType, T_SqlType
 
 
-class AggregateExpression(AggregateType, Expression):
-    def filter(self, condition: Expression) -> FilteredAggregate:
+class AggregateExpression(Expression):
+    is_aggregation: Literal[True] = True
+
+    def filter(self, condition: Expression):
         return FilteredAggregate(self, condition)
 
     def over(
         self,
         partition_by: list[Expression] = None,
         order_by: list[OrderBy] = None,
-    ) -> WindowExpression:
+    ):
         return WindowExpression(self, partition_by, order_by)
 
 
-class AggregateQ(AggregateExpression, Q):
-    pass
-
-
-class AggregateCoalesce(AggregateExpression, Coalesce):
-    pass
-
-
-class AggregateCast(AggregateExpression, Cast):
-    pass
-
-
-class AggregateAtTimeZone(AggregateExpression, AtTimeZone):
-    pass
-
-
-class AggregateFunc(AggregateExpression, Func):
-    def __init__(
-        self,
-        *args: Any,
-        distinct: bool = False,
-        sql_type: T_SqlType = None,
-    ):
-        super().__init__(*args, sql_type=sql_type)
-
-        self.distinct = distinct
-
-    def __sql__(self, context: QueryContext) -> str:
-        return self.__sql_args__(context, "DISTINCT " if self.distinct else "")
-
-
-class UnaryAggregate(AggregateFunc):
-    def __init__(
-        self, expression: Expression, distinct: bool = False, sql_type: T_SqlType = None
-    ):
-        super().__init__(expression, distinct=distinct, sql_type=sql_type)
+Expression.filter = AggregateExpression.filter
+Expression.over = AggregateExpression.over
 
 
 class FilteredAggregate(AggregateExpression):
@@ -71,16 +38,17 @@ class FilteredAggregate(AggregateExpression):
         return f"{agg_sql} FILTER (WHERE {cond_sql})"
 
 
-class WindowExpression(ScalarExpression):
+class WindowExpression(Expression):
     def __init__(
         self,
         expression: AggregateExpression,
         partition_by: Expression | list[Expression] = None,
         order_by: OrderBy | list[OrderBy] | Expression | list[Expression] = None,
     ):
-        super().__init__(sql_type=expression.sql_type)
+        super().__init__()
 
-        self.expression = self._arg(expression)
+        self.expression = expression = self._arg(expression)
+        self.sql_type = expression.sql_type
         self.partition_by: list[Expression] = self._list_arg(partition_by)
         self.order_by: list[Expression] = self._list_arg(order_by)
         self._mode = FrameMode.ROWS
@@ -159,7 +127,16 @@ class WindowExpression(ScalarExpression):
         return f"{agg_sql} OVER {spec_sql}"
 
 
-AggregateType.Q = AggregateQ
-AggregateType.Cast = AggregateCast
-AggregateType.Coalesce = AggregateCoalesce
-AggregateType.AtTimeZone = AggregateAtTimeZone
+class AggregateFunc(AggregateExpression, Func):
+    def __init__(self, *args: Any, distinct: bool = False):
+        super().__init__(*args)
+
+        self.distinct = distinct
+
+    def __sql__(self, context: QueryContext) -> str:
+        return self.__sql_args__(context, "DISTINCT " if self.distinct else "")
+
+
+class UnaryAggregate(AggregateFunc):
+    def __init__(self, expression: Expression, distinct: bool = False):
+        super().__init__(expression, distinct=distinct)

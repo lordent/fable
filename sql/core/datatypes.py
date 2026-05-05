@@ -2,33 +2,40 @@ from typing import Any
 
 
 class SqlType:
-    def __init__(self, name: str, args=None, array_dim=""):
+    def __init__(
+        self,
+        name: str,
+        size: int | None = None,
+        align: int | None = None,
+        args=None,
+        array_dim="",
+    ):
         self.name = name
+        self.size = size
+        self.align = align
         self.args = args or []
         self.array_dim = array_dim
 
     def __call__(self, *args):
-        """Поддержка точности и параметров: NUMERIC(12, 2), TIME(6)"""
-        return SqlType(self.name, args, array_dim=self.array_dim)
+        return SqlType(self.name, self.size, self.align, args, array_dim=self.array_dim)
 
     def __getitem__(self, item):
-        """Поддержка массивов: DATE[:], INT[10], TEXT[:][:]"""
         size = "" if isinstance(item, slice) else str(item)
-        return SqlType(self.name, self.args, array_dim=f"{self.array_dim}[{size}]")
+        return SqlType(
+            self.name, -1, self.align, self.args, array_dim=f"{self.array_dim}[{size}]"
+        )
 
     def __str__(self):
         args_str = f"({', '.join(map(str, self.args))})" if self.args else ""
         return f"{self.name}{args_str}{self.array_dim}"
 
-    def __repr__(self):
-        return f"'{self.__str__()}'"
-
 
 class SqlTypeMeta(type):
     def __new__(mcs, name, bases, attrs: dict[str, Any]):
         for key, value in attrs.items():
-            if isinstance(value, str) and not key.startswith("__"):
-                attrs[key] = SqlType(value)
+            if key.startswith("__"):
+                continue
+            attrs[key] = SqlType(value[0], value[1], value[2])
         return super().__new__(mcs, name, bases, attrs)
 
     def __getattr__(cls, name: str):
@@ -37,77 +44,77 @@ class SqlTypeMeta(type):
 
 class Types(metaclass=SqlTypeMeta):
     # Числа
-    SMALLINT = "SMALLINT"
-    INT = INTEGER = "INTEGER"
-    BIGINT = "BIGINT"
-    NUMERIC = "NUMERIC"
-    DECIMAL = "DECIMAL"
-    REAL = "REAL"
-    DOUBLE_PRECISION = "DOUBLE PRECISION"
-    SMALLSERIAL = "SMALLSERIAL"
-    SERIAL = "SERIAL"
-    BIGSERIAL = "BIGSERIAL"
+    SMALLINT = "SMALLINT", 2, 2
+    INT = INTEGER = "INTEGER", 4, 4
+    BIGINT = "BIGINT", 8, 8
+    NUMERIC = "NUMERIC", -1, 4
+    DECIMAL = "DECIMAL", -1, 4
+    REAL = "REAL", 4, 4
+    DOUBLE_PRECISION = "DOUBLE PRECISION", 8, 8
+    SMALLSERIAL = "SMALLSERIAL", 2, 2
+    SERIAL = "SERIAL", 4, 4
+    BIGSERIAL = "BIGSERIAL", 8, 8
 
     # Текст
-    TEXT = "TEXT"
-    VARCHAR = "VARCHAR"
-    CHAR = "CHAR"
-    CITEXT = "CITEXT"  # Расширение citext
+    TEXT = "TEXT", -1, 4
+    VARCHAR = "VARCHAR", -1, 4
+    CHAR = "CHAR", -1, 4
+    CITEXT = "CITEXT", -1, 4
 
     # Дата и время
-    DATE = "DATE"
-    TIME = "TIME"
-    TIMETZ = "TIME WITH TIME ZONE"
-    TIMESTAMP = "TIMESTAMP"
-    TIMESTAMPTZ = "TIMESTAMP WITH TIME ZONE"
-    INTERVAL = "INTERVAL"
+    DATE = "DATE", 4, 4
+    TIME = "TIME", 8, 8
+    TIMETZ = "TIME WITH TIME ZONE", 12, 4
+    TIMESTAMP = "TIMESTAMP", 8, 8
+    TIMESTAMPTZ = "TIMESTAMP WITH TIME ZONE", 8, 8
+    INTERVAL = "INTERVAL", 16, 8
 
     # Логика и бинарные данные
-    BOOLEAN = BOOL = "BOOLEAN"
-    BYTEA = "BYTEA"
-    BIT = "BIT"
-    VARBIT = "VARBIT"
+    BOOLEAN = BOOL = "BOOLEAN", 1, 1
+    BYTEA = "BYTEA", -1, 4
+    BIT = "BIT", -1, 4
+    VARBIT = "VARBIT", -1, 4
 
     # JSON и XML
-    JSON = "JSON"
-    JSONB = "JSONB"
-    XML = "XML"
+    JSON = "JSON", -1, 4
+    JSONB = "JSONB", -1, 4
+    XML = "XML", -1, 4
 
     # Сетевые типы
-    INET = "INET"
-    CIDR = "CIDR"
-    MACADDR = "MACADDR"
-    MACADDR8 = "MACADDR8"
+    INET = "INET", -1, 4
+    CIDR = "CIDR", -1, 4
+    MACADDR = "MACADDR", 6, 1
+    MACADDR8 = "MACADDR8", 8, 8
 
     # Геометрия
-    POINT = "POINT"
-    LINE = "LINE"
-    LSEG = "LSEG"
-    BOX = "BOX"
-    PATH = "PATH"
-    POLYGON = "POLYGON"
-    CIRCLE = "CIRCLE"
+    POINT = "POINT", 16, 8
+    LINE = "LINE", 32, 8
+    LSEG = "LSEG", 32, 8
+    BOX = "BOX", 32, 8
+    PATH = "PATH", -1, 8
+    POLYGON = "POLYGON", -1, 8
+    CIRCLE = "CIRCLE", 24, 8
 
     # Специфические / Расширения
-    UUID = "UUID"
-    MONEY = "MONEY"
-    TSVECTOR = "TSVECTOR"
-    TSQUERY = "TSQUERY"
-    HSTORE = "HSTORE"
-    LTREE = "LTREE"
+    UUID = "UUID", 16, 1
+    MONEY = "MONEY", 8, 8
+    TSVECTOR = "TSVECTOR", -1, 4
+    TSQUERY = "TSQUERY", -1, 4
+    HSTORE = "HSTORE", -1, 4
+    LTREE = "LTREE", -1, 4
 
     # Диапазоны (Range Types)
-    INT4RANGE = "INT4RANGE"
-    INT8RANGE = "INT8RANGE"
-    NUMRANGE = "NUMRANGE"
-    DATERANGE = "DATERANGE"
-    TSRANGE = "TSRANGE"
-    TSTZRANGE = "TSTZRANGE"
+    INT4RANGE = "INT4RANGE", -1, 8
+    INT8RANGE = "INT8RANGE", -1, 8
+    NUMRANGE = "NUMRANGE", -1, 8
+    DATERANGE = "DATERANGE", -1, 8
+    TSRANGE = "TSRANGE", -1, 8
+    TSTZRANGE = "TSTZRANGE", -1, 8
 
     # Мультидиапазоны (PostgreSQL 14+)
-    INT4MULTIRANGE = "INT4MULTIRANGE"
-    INT8MULTIRANGE = "INT8MULTIRANGE"
-    NUMMULTIRANGE = "NUMMULTIRANGE"
-    DATEMULTIRANGE = "DATEMULTIRANGE"
-    TSMULTIRANGE = "TSMULTIRANGE"
-    TSTZMULTIRANGE = "TSTZMULTIRANGE"
+    INT4MULTIRANGE = "INT4MULTIRANGE", -1, 8
+    INT8MULTIRANGE = "INT8MULTIRANGE", -1, 8
+    NUMMULTIRANGE = "NUMMULTIRANGE", -1, 8
+    DATEMULTIRANGE = "DATEMULTIRANGE", -1, 8
+    TSMULTIRANGE = "TSMULTIRANGE", -1, 8
+    TSTZMULTIRANGE = "TSTZMULTIRANGE", -1, 8

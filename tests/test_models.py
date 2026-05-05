@@ -1,4 +1,4 @@
-from sql.core.base import QueryContext
+from sql.core.node import QueryContext
 from sql.fields.base import ComputedField, Field, ForeignField
 from sql.fields.fields import BoolField, IntField, TextField
 from sql.functions import Count
@@ -97,6 +97,9 @@ def test_deep_inheritance_and_isolation():
     assert id(Admin.id) != id(User.id)
     assert id(Admin.id) != id(Base.id)
     assert id(Admin.id) == id(Admin.id)
+    assert hash(Admin.id) != hash(User.id)
+    assert hash(Admin.id) != hash(Base.id)
+    assert hash(Admin.id) == hash(Admin.id)
 
 
 def test_computed_field():

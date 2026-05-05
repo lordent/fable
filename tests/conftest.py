@@ -6,7 +6,7 @@ import pytest_asyncio
 
 from sql.core.expressions import Expression
 from sql.db import Config, Engine, _sessions_ctx
-from sql.fields.base import ForeignField
+from sql.fields.base import ComputedField, ForeignField
 from sql.fields.fields import (
     ArrayField,
     DateField,
@@ -101,6 +101,7 @@ class Users(TableModel):
     birth_date = DateField()
     tags = ArrayField(TextField())
     metadata = JsonbField()
+    full_name = ComputedField(lambda: t"{Users.first_name} {Users.last_name}")
 
 
 class Sales(TableModel):

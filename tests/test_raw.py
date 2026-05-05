@@ -37,12 +37,10 @@ async def test_select_users():
         Users.birth_date,
         Users.tags,
         Users.metadata,
-        first_name=Raw.Scalar(t"{Users.first_name} || {' VIP'}"),
-        append_tags=Raw.Scalar(t"{Users.tags} || {tags}"),
-        merge_metadata=Raw.Scalar(t"{Users.metadata} || {metadata}"),
-        birth_date_tomorrow=Raw.Scalar(
-            t"{Users.birth_date} + ({days} * INTERVAL '1 day')"
-        )
+        first_name=Raw(t"{Users.first_name} || {' VIP'}"),
+        append_tags=Raw(t"{Users.tags} || {tags}"),
+        merge_metadata=Raw(t"{Users.metadata} || {metadata}"),
+        birth_date_tomorrow=Raw(t"{Users.birth_date} + ({days} * INTERVAL '1 day')")
         >> Types.DATE,
     ).order_by(Users.id)
     users = await query
@@ -58,10 +56,10 @@ async def test_select_users():
     days = 4
     query = Select(
         Sales.amount,
-        increase_amount=Raw.Scalar(t"{Sales.amount} + {Decimal('100')} + {100.20}")
+        increase_amount=Raw(t"{Sales.amount} + {Decimal('100')} + {100.20}")
         >> Types.NUMERIC,
-        now=Raw.Scalar(t"{now} + ({days} * INTERVAL '1 day')"),
-        public_id=Raw.Scalar(t"{public_id}"),
+        now=Raw(t"{now} + ({days} * INTERVAL '1 day')"),
+        public_id=Raw(t"{public_id}"),
     ).order_by(Sales.id)
 
     for row in await query:
@@ -105,7 +103,7 @@ async def test_raw_query():
 def test_injection():
     danger_value = "(SELECT TRUNCATE 'users')"
 
-    expression = Raw.Scalar(t"{Users.birth_date} + {danger_value}")
+    expression = Raw(t"{Users.birth_date} + {danger_value}")
     assert ['("Users"."birth_date" + $1::TEXT)', danger_value] == list(
         expression.prepare()
     )

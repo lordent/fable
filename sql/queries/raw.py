@@ -2,7 +2,7 @@ import inspect
 from string.templatelib import Template
 from typing import Any
 
-from sql.core.base import QueryContext
+from sql.core.node import Node, QueryContext
 from sql.core.raw import Raw
 from sql.core.types import T_Model
 from sql.models import Model, ProxyModel
@@ -35,7 +35,7 @@ class RawQuery(Query):
     def __init__(self, raw: Template):
         super().__init__()
 
-        self._query = self._arg(_QueryRaw(raw))
+        self._query: Node = self._arg(_QueryRaw(raw))
 
     def __sql__(self, context: QueryContext):
         return self._query.__sql__(context)

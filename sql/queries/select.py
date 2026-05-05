@@ -1,21 +1,18 @@
-from __future__ import annotations
-
 from typing import Any, Self, TypedDict
 
-from sql.core.aggregates import AggregateExpression, WindowExpression
+from sql.core.aggregates import WindowExpression
 from sql.core.enums import GroupMode, JoinStrategy, LockMode
 from sql.core.expressions import Expression
+from sql.core.node import QueryContext
 from sql.core.order import OrderBy
+from sql.core.query import Q
 from sql.core.raw import Ref
-from sql.core.scalars import Q
 from sql.core.types import T_Model
 from sql.fields.base import Field
+from sql.models import RecursiveModel, TableModel
 from sql.queries.base import RecursiveContext, ValuesQuery
+from sql.queries.values import Item, List
 from sql.utils import quote_ident
-
-from ..core.base import QueryContext
-from ..models import RecursiveModel, TableModel
-from .values import Item, List
 
 
 class LockDict(TypedDict):
@@ -93,7 +90,7 @@ class Select(ValuesQuery):
     def filter(self, *args: Q) -> Self:
         for a in args:
             a: Q = self._arg(a)
-            if isinstance(a, AggregateExpression):
+            if a.is_aggregation:
                 self._having = (self._having & a) if self._having else a
             else:
                 self._where = (self._where & a) if self._where else a
@@ -151,27 +148,25 @@ class Select(ValuesQuery):
         cols, group_by = [], []
 
         for alias, value in self._values.items():
-            sql_ = self._value(value, context)
+            sql_ = context.value(value)
             if self._has_aggregate and isinstance(value, Expression):
-                if not isinstance(value, AggregateExpression) and not isinstance(
-                    value, WindowExpression
-                ):
+                if not value.is_aggregation and not isinstance(value, WindowExpression):
                     group_by.append(sql_)
 
             cols.append(f"{sql_} AS {quote_ident(alias)}")
 
         if self._has_aggregate and self._order_by:
             for a in self._order_by:
-                wrapped = a.wrapped
+                node = a.node
 
-                if isinstance(wrapped, Ref):
-                    wrapped = self._values[wrapped.reference]
+                if isinstance(node, Ref):
+                    node = self._values[node.reference]
 
-                if isinstance(wrapped, Expression):
-                    if not isinstance(wrapped, AggregateExpression) and not isinstance(
-                        wrapped, WindowExpression
+                if isinstance(node, Expression):
+                    if not node.is_aggregation and not isinstance(
+                        node, WindowExpression
                     ):
-                        group_by.append(self._value(wrapped, context))
+                        group_by.append(context.value(node))
 
         sql = []
 
@@ -213,7 +208,7 @@ class Select(ValuesQuery):
         if self._where:
             sql.append(f"WHERE {self._where.__sql__(context)}")
 
-        manual_group_sql = [self._value(f, context) for f in self._group_by_manual]
+        manual_group_sql = [context.value(f) for f in self._group_by_manual]
 
         final_group_list = group_by + manual_group_sql
 
@@ -222,7 +217,7 @@ class Select(ValuesQuery):
 
             if self._summary:
                 summary = self._summary
-                summary_sql_list = [self._value(f, context) for f in summary["fields"]]
+                summary_sql_list = [context.value(f) for f in summary["fields"]]
 
                 regular_group = [
                     f for f in group_fields_unique if f not in summary_sql_list

@@ -3,8 +3,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sql.core.base import COLLECTION_TYPES
 from sql.core.datatypes import SqlType, Types
+from sql.core.node import COLLECTION_TYPES
 
 
 def from_python(value: Any) -> SqlType:

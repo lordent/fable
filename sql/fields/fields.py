@@ -1,12 +1,12 @@
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any
 
 from sql.core.datatypes import Types
+from sql.core.functions import Extract
 from sql.fields.base import Field
-from sql.functions import Age, Extract
+from sql.functions import Age
 
 if TYPE_CHECKING:
-    from sql.core.aggregates import AggregateExpression, AggregateQ
-    from sql.core.scalars import Q, ScalarExpression
+    pass
 
 
 class ArrayField[F: "Field"](Field):
@@ -73,14 +73,6 @@ class TextField(Field):
 
         self.similarity_threshold = similarity_threshold
 
-    @overload
-    def similar(
-        self, other: AggregateExpression, threshold: float | None = None
-    ) -> AggregateQ: ...
-
-    @overload
-    def similar(self, other: ScalarExpression, threshold: float | None = None) -> Q: ...
-
     def similar(self, other: Any, threshold: float | None = None):
         return self.dist(other) < (threshold or self.similarity_threshold)
 
@@ -88,11 +80,6 @@ class TextField(Field):
 class CharField(Field):
     def __init__(self, max_length: int, **kwargs):
         super().__init__(sql_type=Types.VARCHAR(max_length), **kwargs)
-
-
-class FixedCharField(Field):
-    def __init__(self, length: int, **kwargs):
-        super().__init__(sql_type=Types.CHAR(length), **kwargs)
 
 
 class CitextField(Field):
@@ -108,14 +95,6 @@ class DateField(Field):
     @property
     def age(self):
         return Extract(Age(self), part=Extract.YEAR)
-
-    @property
-    def year(self):
-        return Extract(self, part=Extract.YEAR)
-
-    @property
-    def month(self):
-        return Extract(self, part=Extract.MONTH)
 
 
 class TimeField(Field):

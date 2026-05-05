@@ -1,20 +1,19 @@
-from sql.core.base import Node, QueryContext
 from sql.core.enums import OrderDirections
-from sql.core.mixins import WrappedNodeMixin
+from sql.core.node import Node, QueryContext
 
 
-class OrderBy(WrappedNodeMixin, Node):
+class OrderBy(Node):
     Direction = OrderDirections
 
     def __init__(
-        self, wrapped: Node, direction: OrderDirections, nulls_first: bool = None
+        self, node: Node, direction: OrderDirections, nulls_first: bool = None
     ):
-        super().__init__(wrapped=wrapped)
+        super().__init__()
 
-        self.direction, self.nulls_first = direction, nulls_first
+        self.node, self.direction, self.nulls_first = node, direction, nulls_first
 
     def __sql__(self, context: QueryContext):
-        sql = f"{super().__sql__(context)} {self.direction.value}"
+        sql = f"{self.node.__sql__(context)} {self.direction.value}"
 
         if self.nulls_first is True:
             sql += " NULLS FIRST"
