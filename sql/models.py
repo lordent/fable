@@ -33,7 +33,7 @@ class ModelMeta(type):
             if parent_fields := getattr(base, "_fields", None):
                 for name, field in parent_fields.items():
                     if name not in cls._fields:
-                        field.bind(cls, name)
+                        field.factory(cls, name)
 
         if not cls._app and not cls._virtual and bases:
             cls._app = get_app_for_module(cls.__module__)
@@ -73,7 +73,7 @@ class ProxyModel:
 
     def _bind_fields(self):
         for name, field in self._source._fields.items():
-            field.bind(self, name)
+            field.factory(self, name)
 
     def _bind_app(self):
         self._app = self._source._app
@@ -115,7 +115,7 @@ class QueryModel(ProxyModel):
                         field.sql_type if isinstance(field, Expression) else None
                     ),
                 )
-            field.bind(self, name)
+            field.factory(self, name)
 
     def _bind_app(self):
         self._app = self._source.app

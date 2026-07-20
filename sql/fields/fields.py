@@ -13,7 +13,7 @@ class ArrayField[F: "Field"](Field):
     def __init__(self, base_field: F, **kwargs):
         super().__init__(**kwargs)
 
-        self.base_field = base_field
+        self.base_field: F = base_field
         self.sql_type = self.base_field.sql_type[:]
 
 

@@ -1,11 +1,11 @@
 from collections.abc import Callable
-from copy import deepcopy
 from enum import StrEnum
 from string.templatelib import Template
-from typing import TYPE_CHECKING, Literal, Self, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from sql.core.datatypes import Types
 from sql.core.expressions import Expression
+from sql.core.fields import FieldBlueprint, FieldMeta
 from sql.core.node import QueryContext
 from sql.core.query import Q
 from sql.functions import Concat
@@ -25,16 +25,8 @@ class ReferentialAction(StrEnum):
     NO_ACTION = "NO ACTION"
 
 
-class FieldMeta(type):
-    def __call__(cls: type[F], *args, **kwargs) -> F:
-        blueprint = deepcopy((args, kwargs))
-        instance: Field = type.__call__(cls, *args, **kwargs)
-        instance._blueprint = blueprint
-        return instance
-
-
 class Field(Expression, metaclass=FieldMeta):
-    _blueprint: tuple[tuple, dict]
+    __blueprint__: FieldBlueprint
     sql_type = Types.TEXT
 
     def __init__(self, sql_type=None, primary=False):
@@ -43,18 +35,18 @@ class Field(Expression, metaclass=FieldMeta):
         self.primary = primary
 
     def __set_name__(self, owner: type[Model], name: str):
-        self.model, self.name = owner, name
-        self.relations.add(self.model)
-        owner._fields[name] = self
+        self.contribute_to_model(owner, name)
 
-    def bind(self, owner: type[Model] = None, name: str = None) -> Self:
-        args, kwargs = deepcopy(self._blueprint)
-        instance: Self = type.__call__(self.__class__, *args, **kwargs)
-        instance._blueprint = self._blueprint
-        if owner and name:
-            setattr(owner, name, instance)
-            instance.__set_name__(owner, name)
-        return instance
+    def contribute_to_model(self, model: type[Model], name: str):
+        self.model, self.name = model, name
+        self.relations.add(self.model)
+        model._fields[name] = self
+        setattr(model, name, self)
+
+    def factory(self, model: type[Model], name: str) -> Field:
+        field = self.__blueprint__.factory()
+        field.contribute_to_model(model, name)
+        return field
 
     def __sql__(self, context: QueryContext) -> str:
         return f"{quote_ident(context.get_alias(self.model))}.{quote_ident(self.name)}"
@@ -84,13 +76,13 @@ class ForeignField[M: type["Model"]](Field):
         self.to = to
         self.on_delete = on_delete
 
-    def __set_name__(self, owner: M, name: str):
-        super().__set_name__(owner, name)
+    def contribute_to_model(self, model: M, name: str):
+        super().contribute_to_model(model, name)
 
         if self.to == "Self":
             self.to = self.model
 
-        owner._foreign_fields[name] = self
+        model._foreign_fields[name] = self
 
 
 class ComputedField(Field):
@@ -102,7 +94,7 @@ class ComputedField(Field):
         self.expression = None
         self._expression = expression
 
-    def __get__(self, instance, owner: type[Model]):
+    def __get__(self, instance: ComputedField, owner: type[Model]):
         if not self.expression:
             expression = self._expression
             expression = expression() if callable(expression) else expression

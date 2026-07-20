@@ -1,9 +1,13 @@
+import concurrent.futures
+import threading
+
 from sql.core.node import QueryContext
 from sql.fields.base import ComputedField, Field, ForeignField
 from sql.fields.fields import BoolField, IntField, TextField
 from sql.functions import Count
 from sql.models import TableModel
 from sql.queries.base import ValuesQuery
+from sql.queries.select import Select
 
 # --- ТЕСТОВЫЕ МОДЕЛИ ---
 
@@ -21,7 +25,8 @@ class Post(TableModel):
 
 
 class Profile(TableModel):
-    user = IntField()
+    user_id = ForeignField(User)
+    multiplier = IntField()
 
 
 class Base(TableModel):
@@ -42,7 +47,7 @@ def test_model_initialization():
 
 def test_inheritance_fields():
     assert "id" in Profile._fields
-    assert "user" in Profile._fields
+    assert "user_id" in Profile._fields
     assert User.id is not Profile.id
     assert User.id.model == User
     assert Profile.id.model == Profile
@@ -123,3 +128,41 @@ def test_computed_field_isolation():
 
     assert AnotherModel.calc.expression is not None
     assert AnotherModel.calc.__sql__(QueryContext()) == '("AnotherModel"."val" * $1)'
+
+
+def test_mutithread():
+    num_threads = 20
+    barrier = threading.Barrier(num_threads)
+
+    def compile_complex_query_worker(thread_id: int):
+        user_id_val = 10 + thread_id
+        posts_count_val = 100 + thread_id
+        barrier.wait()
+
+        context = QueryContext()
+        query = (
+            Select(User.name, total_posts=User.posts_count * Profile.multiplier)
+            .join(Profile)
+            .join(User)
+            .filter(User.id > user_id_val)
+            .filter(User.posts_count > posts_count_val)
+        )
+
+        sql = query.__sql__(context)
+
+        assert 'COUNT("Post"."id")' in sql
+        assert '("User"."id" > $1)' in sql
+        assert '(COUNT("Post"."id") > $2)' in sql
+        assert context.params[0] == user_id_val
+        assert context.params[1] == posts_count_val
+        assert len(context.params) == 2
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [
+            executor.submit(compile_complex_query_worker, i) for i in range(num_threads)
+        ]
+        concurrent.futures.wait(futures)
+        for future in futures:
+            future.result()
+
+    assert User.posts_count.relations == {User, Post}

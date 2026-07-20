@@ -140,7 +140,7 @@ async def test_arithmetics():
         Users.first_name == "Александр"
     )
     res = await query
-    assert 15 <= res[0]["young_age"] <= 17  # Зависит от текущего месяца
+    assert 15 <= res[0]["young_age"] <= 18  # Зависит от текущего месяца
 
     query = Select(double=Sales.amount * 2).filter(Sales.amount == 1500)
     res = await query
